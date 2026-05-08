@@ -216,3 +216,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node.js / TypeScript
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+
+# Environment overrides
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code (per-user, not team-shared)
+.claude/settings.local.json
