@@ -1,19 +1,23 @@
 import { useMemo, useState, type DragEvent } from 'react';
 import { Day } from './domain/day.js';
-import type { TaskTemplate, TimeBlock } from './domain/types.js';
+import type { MinuteOfDay, TaskTemplate, TimeBlock } from './domain/types.js';
 import { SAMPLE_TEMPLATES } from './templates.js';
 
 const PX_PER_MIN = 1;
 const SNAP_MIN = 15;
 const TODAY = '2026-05-09';
+const FREEFORM_DEFAULT_DURATION = 30;
+const DEFAULT_LABEL = '新規ブロック';
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
-
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+const snapMinutes = (mins: number): MinuteOfDay =>
+  Math.round(Math.max(0, mins) / SNAP_MIN) * SNAP_MIN;
 
 export function App() {
   const [blocks, setBlocks] = useState<readonly TimeBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const templateById = useMemo(() => {
     const m = new Map<string, TaskTemplate>();
@@ -21,52 +25,107 @@ export function App() {
     return m;
   }, []);
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>): void => {
-    e.preventDefault();
-    const templateId = e.dataTransfer.getData('templateId');
-    const tmpl = templateById.get(templateId);
-    if (!tmpl) return;
-
-    const target = e.currentTarget;
-    const rect = target.getBoundingClientRect();
-    const y = e.clientY - rect.top + target.scrollTop;
-    const rawMinute = Math.max(0, Math.round(y / PX_PER_MIN));
-    const snapped = Math.round(rawMinute / SNAP_MIN) * SNAP_MIN;
-
+  const applyPlace = (newBlock: TimeBlock, snappedForError: MinuteOfDay): boolean => {
     const day = new Day(TODAY, blocks);
-    const newBlock: TimeBlock = {
-      id: crypto.randomUUID(),
-      label: tmpl.label,
-      start: snapped,
-      durationMin: tmpl.defaultDurationMin,
-      templateId: tmpl.id,
-    };
     const result = day.place(newBlock);
     if (result.ok) {
       setBlocks(day.blocks);
       setError(null);
+      return true;
+    }
+    if (result.reason === 'overlap') {
+      setError(`重なっていますわ — ${formatMinute(snappedForError)} は他のブロックと衝突しています`);
+    } else {
+      setError(result.message);
+    }
+    return false;
+  };
+
+  const applyMove = (id: string, newStart: MinuteOfDay): void => {
+    const day = new Day(TODAY, blocks);
+    const result = day.move(id, newStart);
+    if (result.ok) {
+      setBlocks(day.blocks);
+      setError(null);
     } else if (result.reason === 'overlap') {
-      setError(`重なっていますわ — ${formatMinute(snapped)} は他のブロックと衝突しています`);
+      setError(`移動できませんでしたわ — ${formatMinute(newStart)} で他のブロックと衝突しています`);
     } else {
       setError(result.message);
     }
   };
 
-  const handleRemove = (id: string): void => {
-    const day = new Day(TODAY, blocks);
-    day.remove(id);
-    setBlocks(day.blocks);
-    setError(null);
-  };
-
-  const handleDragStart = (e: DragEvent<HTMLDivElement>, templateId: string): void => {
+  const handleTemplateDragStart = (e: DragEvent<HTMLDivElement>, templateId: string): void => {
+    e.dataTransfer.setData('kind', 'template');
     e.dataTransfer.setData('templateId', templateId);
     e.dataTransfer.effectAllowed = 'copy';
   };
 
+  const handleBlockDragStart = (e: DragEvent<HTMLDivElement>, blockId: string): void => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const offsetMin = (e.clientY - rect.top) / PX_PER_MIN;
+    e.dataTransfer.setData('kind', 'block');
+    e.dataTransfer.setData('blockId', blockId);
+    e.dataTransfer.setData('offsetMin', String(offsetMin));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
   const handleDragOver = (e: DragEvent<HTMLDivElement>): void => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+    // dropEffect must be compatible with source's effectAllowed; templates use 'copy', so leave default.
+  };
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    const kind = e.dataTransfer.getData('kind');
+    const target = e.currentTarget;
+    const rect = target.getBoundingClientRect();
+    const yMin = (e.clientY - rect.top + target.scrollTop) / PX_PER_MIN;
+
+    if (kind === 'template') {
+      const templateId = e.dataTransfer.getData('templateId');
+      const tmpl = templateById.get(templateId);
+      if (!tmpl) return;
+      const snapped = snapMinutes(yMin);
+      applyPlace({
+        id: crypto.randomUUID(),
+        label: tmpl.label,
+        start: snapped,
+        durationMin: tmpl.defaultDurationMin,
+        templateId: tmpl.id,
+      }, snapped);
+    } else if (kind === 'block') {
+      const blockId = e.dataTransfer.getData('blockId');
+      const offsetStr = e.dataTransfer.getData('offsetMin');
+      const offsetMin = offsetStr.length > 0 ? parseFloat(offsetStr) : 0;
+      const snapped = snapMinutes(yMin - offsetMin);
+      applyMove(blockId, snapped);
+    }
+  };
+
+  const handleCreateAt = (minute: MinuteOfDay): void => {
+    const newBlock: TimeBlock = {
+      id: crypto.randomUUID(),
+      label: DEFAULT_LABEL,
+      start: minute,
+      durationMin: FREEFORM_DEFAULT_DURATION,
+    };
+    if (applyPlace(newBlock, minute)) {
+      setEditingId(newBlock.id);
+    }
+  };
+
+  const handleRemove = (id: string): void => {
+    setBlocks((prev) => prev.filter((b) => b.id !== id));
+    if (editingId === id) setEditingId(null);
+    setError(null);
+  };
+
+  const commitEdit = (id: string, rawLabel: string): void => {
+    const trimmed = rawLabel.trim();
+    if (trimmed.length > 0) {
+      setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, label: trimmed } : b)));
+    }
+    setEditingId(null);
   };
 
   return (
@@ -79,7 +138,7 @@ export function App() {
           <div
             key={t.id}
             draggable
-            onDragStart={(e) => handleDragStart(e, t.id)}
+            onDragStart={(e) => handleTemplateDragStart(e, t.id)}
             style={{
               background: 'white',
               border: '1px solid #e5e7eb',
@@ -98,7 +157,10 @@ export function App() {
           </div>
         ))}
         <p style={{ fontSize: '11px', color: '#9ca3af', marginTop: '20px', lineHeight: 1.5 }}>
-          右のタイムラインへドラッグ&amp;ドロップして配置してくださいませ。
+          ・テンプレを D&amp;D で配置<br />
+          ・空き時間ダブルクリックで自由記入<br />
+          ・設置済みブロックもドラッグで移動<br />
+          ・ラベルクリックで名前を編集
         </p>
       </aside>
 
@@ -113,7 +175,30 @@ export function App() {
           onDrop={handleDrop}
           style={{ flex: 1, overflow: 'auto', position: 'relative', background: '#fafafa' }}
         >
-          <div style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}>
+          <div
+            style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}
+          >
+            {Array.from({ length: 48 }).map((_, i) => {
+              const minute = i * 30;
+              return (
+                <div
+                  key={`slot-${i}`}
+                  onDoubleClick={() => handleCreateAt(minute)}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.08)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                  style={{
+                    position: 'absolute',
+                    top: `${minute * PX_PER_MIN}px`,
+                    left: 0,
+                    right: 0,
+                    height: `${30 * PX_PER_MIN}px`,
+                    background: 'transparent',
+                    transition: 'background 80ms',
+                  }}
+                />
+              );
+            })}
+
             {Array.from({ length: 25 }).map((_, h) => (
               <div key={h} style={{
                 position: 'absolute',
@@ -132,9 +217,12 @@ export function App() {
             {blocks.map((b) => {
               const tmpl = b.templateId !== undefined ? templateById.get(b.templateId) : undefined;
               const color = tmpl?.color ?? '#64748b';
+              const isEditing = editingId === b.id;
               return (
                 <div
                   key={b.id}
+                  draggable={!isEditing}
+                  onDragStart={(e) => handleBlockDragStart(e, b.id)}
                   style={{
                     position: 'absolute',
                     top: `${b.start * PX_PER_MIN}px`,
@@ -148,17 +236,57 @@ export function App() {
                     fontSize: '12px',
                     overflow: 'hidden',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+                    cursor: isEditing ? 'text' : 'grab',
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '4px' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.label}</span>
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        defaultValue={b.label}
+                        draggable={false}
+                        onBlur={(e) => commitEdit(b.id, e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.currentTarget.blur();
+                          } else if (e.key === 'Escape') {
+                            setEditingId(null);
+                          }
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          flex: 1,
+                          background: 'rgba(255,255,255,0.18)',
+                          border: '1px solid rgba(255,255,255,0.55)',
+                          color: 'white',
+                          fontSize: '12px',
+                          padding: '1px 4px',
+                          borderRadius: '3px',
+                          minWidth: 0,
+                          outline: 'none',
+                        }}
+                      />
+                    ) : (
+                      <span
+                        onClick={(e) => { e.stopPropagation(); setEditingId(b.id); }}
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          cursor: 'text',
+                          flex: 1,
+                        }}
+                      >
+                        {b.label}
+                      </span>
+                    )}
                     <button
-                      onClick={() => handleRemove(b.id)}
+                      onClick={(e) => { e.stopPropagation(); handleRemove(b.id); }}
                       style={{ background: 'rgba(0,0,0,0.25)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px', padding: '0 6px', lineHeight: 1.4 }}
                       aria-label="削除"
                     >×</button>
                   </div>
-                  {b.durationMin >= 25 && (
+                  {b.durationMin >= 25 && !isEditing && (
                     <div style={{ fontSize: '10px', opacity: 0.85, marginTop: '2px' }}>
                       {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
                     </div>
