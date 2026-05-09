@@ -8,7 +8,7 @@ import { DayView } from './views/DayView.js';
 import { WeekView } from './views/WeekView.js';
 import { MonthView } from './views/MonthView.js';
 import { YearView } from './views/YearView.js';
-import { loadStore, saveStore } from './storage.js';
+import { loadStore, saveStore, importStoreFromJson, isUsingTauriBackend } from './storage.js';
 import { aggregateMonthly } from './domain/aggregate.js';
 import { effectiveBudgetPM, projectBudgetUsage } from './domain/budget.js';
 import { useGcalAuth } from './gcal/useGcalAuth.js';
@@ -76,13 +76,14 @@ type BlockEditState = {
   readonly gcalRecurring?: true;
 };
 
-type SettingsView = 'menu' | 'projects' | 'templates' | 'gcal';
+type SettingsView = 'menu' | 'projects' | 'templates' | 'gcal' | 'data';
 
 const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
   projects: '案件設定',
   templates: 'テンプレート設定',
   gcal: 'Google Calendar 連携',
+  data: 'データ移行',
 };
 
 const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
@@ -118,13 +119,13 @@ const shiftViewDate = (s: DateString, mode: ViewMode, delta: number): DateString
 export function App() {
   const [currentDate, setCurrentDate] = useState<DateString>(today);
   const [viewMode, setViewMode] = useState<ViewMode>('day');
-  const [blocksByDate, setBlocksByDate] = useState<Record<DateString, readonly TimeBlock[]>>(
-    () => loadStore().blocksByDate,
-  );
-  const [projects, setProjects] = useState<readonly Project[]>(() => loadStore().projects);
-  const [templates, setTemplates] = useState<readonly TaskTemplate[]>(() => loadStore().templates);
-  const [gcalAssignments, setGcalAssignments] = useState<Record<string, GcalAssignment>>(() => loadStore().gcalAssignments);
-  const [gcalSummaryRules, setGcalSummaryRules] = useState<Record<string, { projectId?: string; hidden?: true }>>(() => loadStore().gcalSummaryRules);
+  const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [blocksByDate, setBlocksByDate] = useState<Record<DateString, readonly TimeBlock[]>>({});
+  const [projects, setProjects] = useState<readonly Project[]>([]);
+  const [templates, setTemplates] = useState<readonly TaskTemplate[]>([]);
+  const [gcalAssignments, setGcalAssignments] = useState<Record<string, GcalAssignment>>({});
+  const [gcalSummaryRules, setGcalSummaryRules] = useState<Record<string, { projectId?: string; hidden?: true }>>({});
   const [editApplyToAllSameSummary, setEditApplyToAllSameSummary] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockEdit, setBlockEdit] = useState<BlockEditState | null>(null);
@@ -147,6 +148,9 @@ export function App() {
   const [colorPickerTemplateId, setColorPickerTemplateId] = useState<string | null>(null);
   const [editingMonthBudgetProjectId, setEditingMonthBudgetProjectId] = useState<string | null>(null);
   const [editingMonthBudgetValue, setEditingMonthBudgetValue] = useState('');
+  const [importText, setImportText] = useState('');
+  const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'success' | 'error'>('idle');
+  const [importError, setImportError] = useState<string | null>(null);
 
   const gcalAuth = useGcalAuth();
   const gcalCalendars = useGcalCalendarList(gcalAuth.accessToken);
@@ -180,8 +184,31 @@ export function App() {
   }, [blocksByDate, gcalSync.blocksByDate]);
 
   useEffect(() => {
-    saveStore({ blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules });
-  }, [blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
+    let cancelled = false;
+    loadStore()
+      .then((state) => {
+        if (cancelled) return;
+        setBlocksByDate(state.blocksByDate);
+        setProjects(state.projects);
+        setTemplates(state.templates);
+        setGcalAssignments(state.gcalAssignments);
+        setGcalSummaryRules(state.gcalSummaryRules);
+        setLoadStatus('ready');
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setLoadStatus('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loadStatus !== 'ready') return;
+    void saveStore({ blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules });
+  }, [loadStatus, blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
 
   const blocks: readonly TimeBlock[] = mergedBlocksByDate[currentDate] ?? [];
 
@@ -580,6 +607,24 @@ export function App() {
     setViewMode(mode);
   };
 
+  const handleImport = async (): Promise<void> => {
+    setImportStatus('importing');
+    setImportError(null);
+    try {
+      const state = await importStoreFromJson(importText);
+      setBlocksByDate(state.blocksByDate);
+      setProjects(state.projects);
+      setTemplates(state.templates);
+      setGcalAssignments(state.gcalAssignments);
+      setGcalSummaryRules(state.gcalSummaryRules);
+      setImportStatus('success');
+      setImportText('');
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : String(e));
+      setImportStatus('error');
+    }
+  };
+
   const isToday = currentDate === today();
 
   const headerDateLabel = ((): string => {
@@ -593,6 +638,25 @@ export function App() {
     if (viewMode === 'month') return formatJaYearMonth(yearMonthOf(currentDate));
     return `${yearOf(currentDate)}年`;
   })();
+
+  if (loadStatus === 'loading') {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background text-muted-foreground text-sm">
+        読み込み中…
+      </div>
+    );
+  }
+  if (loadStatus === 'error') {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background">
+        <div className="text-center max-w-md">
+          <div className="text-destructive font-semibold mb-2">読み込みエラー</div>
+          <div className="text-muted-foreground text-sm mb-4">{loadError ?? '不明なエラー'}</div>
+          <Button onClick={() => location.reload()}>再読み込み</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -820,6 +884,7 @@ export function App() {
                 { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
                 { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
                 { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
+                { key: 'data' as const, label: 'データ移行', desc: 'ブラウザ localStorage から JSON で取り込み（上書き）' },
               ].map((item) => (
                 <button
                   key={item.key}
@@ -1347,6 +1412,62 @@ export function App() {
                       })()}
                     </>
                   )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {settingsView === 'data' && (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                ブラウザ (Chrome 等) で動かしていた taskette の localStorage を取り込みます。
+                ブラウザの DevTools コンソールで以下を実行してクリップボードにコピーし、下のテキスト欄に貼り付けてくださいませ。
+              </p>
+              <pre className="text-[11px] bg-muted px-3 py-2 rounded-md overflow-x-auto font-mono">{`copy(localStorage.getItem('taskette/v1'))`}</pre>
+              <Label htmlFor="import-textarea" className="text-xs">JSON ペースト欄</Label>
+              <textarea
+                id="import-textarea"
+                className="w-full min-h-32 p-2 text-xs font-mono border border-border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+                placeholder='{"version":1,"blocksByDate":{...},"projects":[...],...}'
+              />
+              <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                ⚠ 取り込みは現在のデータをすべて上書きしますの。元には戻せません。
+              </div>
+              {importError !== null && (
+                <div className="text-xs text-destructive">エラー: {importError}</div>
+              )}
+              {importStatus === 'success' && (
+                <div className="text-xs text-emerald-600">取り込み完了しましたわ。</div>
+              )}
+              <div className="flex gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setImportText('');
+                    setImportError(null);
+                    setImportStatus('idle');
+                  }}
+                  disabled={importStatus === 'importing'}
+                >
+                  クリア
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    void handleImport();
+                  }}
+                  disabled={importText.trim().length === 0 || importStatus === 'importing'}
+                >
+                  {importStatus === 'importing' ? '取り込み中…' : '取り込む（上書き）'}
+                </Button>
+              </div>
+              {!isUsingTauriBackend() && (
+                <div className="text-[11px] text-muted-foreground border-t pt-2 mt-2">
+                  現在はブラウザ環境ですので、取り込み先も localStorage です。Tauri アプリで実行すれば SQLite に書き込まれますの。
                 </div>
               )}
             </div>
