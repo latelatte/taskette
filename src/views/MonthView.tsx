@@ -2,9 +2,10 @@ import { useMemo } from 'react';
 import type { DateString, Project, TimeBlock } from '../domain/types.js';
 import { aggregateDaily } from '../domain/aggregate.js';
 import { daysOfMonthGrid, today, yearMonthOf } from '../dates.js';
+import { cn } from '../lib/utils.js';
 
-const FALLBACK_BLOCK_COLOR = '#64748b';
-const UNASSIGNED_COLOR = '#9ca3af';
+const FALLBACK_BLOCK_COLOR = '#A39A92';
+const UNASSIGNED_COLOR = '#B5B0A8';
 const WEEKDAY_LABELS = ['月', '火', '水', '木', '金', '土', '日'] as const;
 
 type Props = {
@@ -21,35 +22,22 @@ export function MonthView({ currentDate, blocksByDate, projects, projectById, on
   const grid = useMemo(() => daysOfMonthGrid(ym), [ym]);
 
   return (
-    <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', background: '#fafafa' }}>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(7, 1fr)',
-        borderBottom: '1px solid #e5e7eb',
-        background: 'white',
-        flexShrink: 0,
-      }}>
+    <div className="flex-1 overflow-auto flex flex-col bg-background">
+      <div className="grid grid-cols-7 border-b bg-card/90 backdrop-blur-sm shrink-0">
         {WEEKDAY_LABELS.map((wd, i) => (
           <div
             key={wd}
-            style={{
-              padding: '8px 6px',
-              textAlign: 'center',
-              fontSize: '11px',
-              fontWeight: 600,
-              color: i >= 5 ? '#9ca3af' : '#6b7280',
-              borderRight: i < 6 ? '1px solid #f3f4f6' : 'none',
-            }}
-          >{wd}</div>
+            className={cn(
+              'px-1.5 py-2 text-center text-[11px] font-semibold tracking-wide',
+              i < 6 && 'border-r border-border/60',
+              i >= 5 ? 'text-muted-foreground/70' : 'text-muted-foreground',
+            )}
+          >
+            {wd}
+          </div>
         ))}
       </div>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(7, 1fr)',
-        gridTemplateRows: 'repeat(6, 1fr)',
-        flex: 1,
-        gap: 0,
-      }}>
+      <div className="grid grid-cols-7 grid-rows-6 flex-1">
         {grid.map((date) => {
           const inMonth = yearMonthOf(date) === ym;
           const isToday = date === todayStr;
@@ -75,48 +63,38 @@ export function MonthView({ currentDate, blocksByDate, projects, projectById, on
             <div
               key={date}
               onClick={() => onDayClick(date)}
-              style={{
-                position: 'relative',
-                background: inMonth ? 'white' : '#f9fafb',
-                borderRight: '1px solid #f3f4f6',
-                borderBottom: '1px solid #f3f4f6',
-                padding: '6px 8px',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '4px',
-                minHeight: 0,
-                overflow: 'hidden',
-              }}
+              className={cn(
+                'relative cursor-pointer flex flex-col gap-1 px-2 py-1.5 min-h-0 overflow-hidden border-r border-b border-border/60 transition-colors',
+                inMonth ? 'bg-card hover:bg-accent/30' : 'bg-muted/40 hover:bg-muted/60',
+              )}
             >
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '4px' }}>
-                <span style={{
-                  fontSize: '12px',
-                  fontWeight: isToday ? 700 : 500,
-                  color: !inMonth ? '#9ca3af' : isToday ? '#2563eb' : '#1f2937',
-                  background: isToday ? 'rgba(37,99,235,0.12)' : 'transparent',
-                  borderRadius: '50%',
-                  width: isToday ? '20px' : 'auto',
-                  height: isToday ? '20px' : 'auto',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>{dayNumber}</span>
+              <div className="flex items-baseline justify-between gap-1">
+                <span
+                  className={cn(
+                    'inline-flex items-center justify-center text-xs',
+                    isToday ? 'font-bold' : 'font-medium',
+                    isToday
+                      ? 'rounded-full w-5 h-5 bg-primary/12 text-primary'
+                      : !inMonth
+                        ? 'text-muted-foreground/70'
+                        : 'text-foreground',
+                  )}
+                >
+                  {dayNumber}
+                </span>
                 {totalMin > 0 && (
-                  <span style={{ fontSize: '10px', color: inMonth ? '#374151' : '#9ca3af', fontWeight: 500 }}>
+                  <span
+                    className={cn(
+                      'text-[10px] font-medium',
+                      inMonth ? 'text-foreground/75' : 'text-muted-foreground/60',
+                    )}
+                  >
                     {totalH.toFixed(1)}h
                   </span>
                 )}
               </div>
               {totalMin > 0 && (
-                <div style={{
-                  height: 4,
-                  background: '#f3f4f6',
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  display: 'flex',
-                  marginTop: 'auto',
-                }}>
+                <div className="h-1 bg-muted rounded-[2px] overflow-hidden flex mt-auto">
                   {segments.map((s, idx) => (
                     <div
                       key={idx}

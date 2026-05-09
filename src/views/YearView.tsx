@@ -7,17 +7,20 @@ import {
   worstBudgetStatus,
 } from '../domain/budget.js';
 import { elapsedRatio, monthsOfYear, today, yearMonthOf, yearOf } from '../dates.js';
+import { cn } from '../lib/utils.js';
 
-const FALLBACK_BLOCK_COLOR = '#64748b';
-const UNASSIGNED_COLOR = '#9ca3af';
+const FALLBACK_BLOCK_COLOR = '#A39A92';
+const UNASSIGNED_COLOR = '#B5B0A8';
 
+// 予算 4 段階警告 + ok / noBudget — semantic 性 (赤=危険, 橙=警告, 緑=OK) は維持しつつ
+// 原色 (red-600 等) → ニュアンス系の落ち着いたトーンに refined。
 const STATUS_BORDER: Record<BudgetStatus, string> = {
-  over: '#dc2626',
-  projectedOver: '#f97316',
-  underConfirmed: '#d97706',
-  projectedUnder: '#f59e0b',
-  ok: '#10b981',
-  noBudget: '#d1d5db',
+  over: '#B85C5C',           // dusty red (was #dc2626)
+  projectedOver: '#C58054',  // soft burnt orange (was #f97316)
+  underConfirmed: '#A8783D', // deep amber, refined (was #d97706)
+  projectedUnder: '#C29050', // soft amber (was #f59e0b)
+  ok: '#7FA384',             // sage green (was #10b981)
+  noBudget: '#D1CDC6',       // warm light gray (was #d1d5db)
 };
 
 const MONTH_NAMES_JA = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'] as const;
@@ -73,81 +76,68 @@ export function YearView({ currentDate, blocksByDate, projects, projectById, onM
   }, [year, blocksByDate, projects, projectById, todayStr]);
 
   return (
-    <div style={{ flex: 1, overflow: 'auto', padding: '20px', background: '#fafafa' }}>
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gridTemplateRows: 'repeat(3, 1fr)',
-        gap: '12px',
-        height: '100%',
-        minHeight: '480px',
-      }}>
+    <div className="flex-1 overflow-auto p-5 bg-background">
+      <div className="grid grid-cols-4 grid-rows-3 gap-3 h-full min-h-[480px]">
         {monthsData.map(({ ym, status, overCount, underCount, totalMin, segments, elapsed }, i) => {
           const isCurrentMonth = ym === todayYM;
           const isFuture = ym > todayYM;
           const totalH = totalMin / 60;
           const fullScale = segments.reduce((a, s) => a + s.min, 0) || 1;
-          const borderColor = isFuture ? '#e5e7eb' : STATUS_BORDER[status];
+          const borderColor = isFuture ? 'var(--border)' : STATUS_BORDER[status];
 
           return (
             <button
               key={ym}
               onClick={() => onMonthClick(ym)}
+              className={cn(
+                'bg-card border rounded-lg px-3.5 py-3 cursor-pointer flex flex-col gap-2 text-left transition-shadow hover:shadow-md',
+                isFuture && 'opacity-60',
+              )}
               style={{
-                background: 'white',
-                border: '1px solid #e5e7eb',
                 borderLeft: `4px solid ${borderColor}`,
-                borderRadius: '6px',
-                padding: '12px 14px',
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-                textAlign: 'left',
-                boxShadow: isCurrentMonth ? '0 0 0 2px rgba(37,99,235,0.25)' : '0 1px 2px rgba(0,0,0,0.04)',
-                opacity: isFuture ? 0.6 : 1,
+                boxShadow: isCurrentMonth
+                  ? '0 0 0 2px var(--ring)'
+                  : 'var(--shadow-soft)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                <span style={{
-                  fontSize: '13px',
-                  fontWeight: isCurrentMonth ? 700 : 600,
-                  color: isCurrentMonth ? '#2563eb' : '#1f2937',
-                }}>{MONTH_NAMES_JA[i]}</span>
-                <div style={{ display: 'flex', gap: '4px' }}>
+              <div className="flex items-baseline justify-between">
+                <span
+                  className={cn(
+                    'text-[13px]',
+                    isCurrentMonth ? 'font-bold text-primary' : 'font-semibold text-foreground',
+                  )}
+                >
+                  {MONTH_NAMES_JA[i]}
+                </span>
+                <div className="flex gap-1">
                   {overCount > 0 && (
-                    <span style={{
-                      fontSize: '10px',
-                      background: '#fee2e2',
-                      color: '#dc2626',
-                      borderRadius: '8px',
-                      padding: '1px 6px',
-                      fontWeight: 600,
-                    }} title={`${overCount}件の超過/予測超過`}>▲{overCount}</span>
+                    <span
+                      className="text-[10px] bg-destructive/15 text-destructive rounded-full px-1.5 py-px font-semibold"
+                      title={`${overCount}件の超過/予測超過`}
+                    >
+                      ▲{overCount}
+                    </span>
                   )}
                   {underCount > 0 && (
-                    <span style={{
-                      fontSize: '10px',
-                      background: '#fef3c7',
-                      color: '#d97706',
-                      borderRadius: '8px',
-                      padding: '1px 6px',
-                      fontWeight: 600,
-                    }} title={`${underCount}件の不足/予測不足`}>▼{underCount}</span>
+                    <span
+                      className="text-[10px] bg-amber-100 text-amber-700 rounded-full px-1.5 py-px font-semibold"
+                      title={`${underCount}件の不足/予測不足`}
+                    >
+                      ▼{underCount}
+                    </span>
                   )}
                 </div>
               </div>
-              <div style={{ fontSize: '20px', fontWeight: 700, color: totalMin > 0 ? '#1f2937' : '#9ca3af' }}>
+              <div
+                className={cn(
+                  'text-xl font-bold',
+                  totalMin > 0 ? 'text-foreground' : 'text-muted-foreground/60',
+                )}
+              >
                 {totalMin > 0 ? `${totalH.toFixed(1)}h` : '—'}
               </div>
               {segments.length > 0 && (
-                <div style={{
-                  height: 6,
-                  background: '#f3f4f6',
-                  borderRadius: 3,
-                  overflow: 'hidden',
-                  display: 'flex',
-                }}>
+                <div className="h-1.5 bg-muted rounded-[3px] overflow-hidden flex">
                   {segments.map((s, idx) => (
                     <div
                       key={idx}
@@ -160,7 +150,7 @@ export function YearView({ currentDate, blocksByDate, projects, projectById, onM
                 </div>
               )}
               {!isFuture && elapsed < 1 && elapsed > 0 && (
-                <div style={{ fontSize: '10px', color: '#9ca3af' }}>
+                <div className="text-[10px] text-muted-foreground/70">
                   経過 {Math.round(elapsed * 100)}%
                 </div>
               )}

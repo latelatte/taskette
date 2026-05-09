@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Design Tokens — taskette
+   Direction: Linear-like minimal × Apple-like quality (subtle blur/translucency)
+                × dusty rose nuance accent
+   Theme: light only for now; .dark structure stub kept for future
+   ============================================================ */
+
+@theme inline {
+  /* Surface / text — wire shadcn-style semantic vars to Tailwind utilities */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Dusty rose palette — accent for buttons / links / selected state */
+  --color-rose-50: oklch(0.975 0.010 10);
+  --color-rose-100: oklch(0.945 0.020 10);
+  --color-rose-200: oklch(0.895 0.035 10);
+  --color-rose-300: oklch(0.825 0.055 10);
+  --color-rose-400: oklch(0.745 0.070 10);
+  --color-rose-500: oklch(0.665 0.080 10);
+  --color-rose-600: oklch(0.575 0.085 10);
+  --color-rose-700: oklch(0.475 0.080 10);
+  --color-rose-800: oklch(0.375 0.060 10);
+  --color-rose-900: oklch(0.275 0.040 10);
+
+  /* Radius scale */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Font */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP",
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+
+  /* Shadow scale — subtle, Linear-like */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 3px rgb(0 0 0 / 0.04);
+  --shadow-floaty: 0 4px 12px rgb(0 0 0 / 0.06), 0 2px 4px rgb(0 0 0 / 0.04);
+  --shadow-popover: 0 12px 32px rgb(0 0 0 / 0.10), 0 4px 8px rgb(0 0 0 / 0.06);
+}
+
+/* ---------- Light theme (default) ---------- */
+:root {
+  --radius: 0.625rem; /* 10px — slightly rounder than shadcn default */
+
+  /* Warm off-white / stone palette */
+  --background: oklch(0.992 0.003 50);              /* #FBFAF8 ish */
+  --foreground: oklch(0.225 0.012 50);              /* near-black, warm */
+
+  --card: oklch(1.000 0 0);                         /* pure white card surface */
+  --card-foreground: oklch(0.225 0.012 50);
+
+  --popover: oklch(1.000 0 0);
+  --popover-foreground: oklch(0.225 0.012 50);
+
+  /* Primary = dusty rose 500 */
+  --primary: oklch(0.665 0.080 10);
+  --primary-foreground: oklch(0.992 0.003 50);
+
+  /* Secondary = subtle warm neutral fill */
+  --secondary: oklch(0.965 0.005 50);
+  --secondary-foreground: oklch(0.330 0.015 50);
+
+  --muted: oklch(0.965 0.005 50);
+  --muted-foreground: oklch(0.530 0.012 50);
+
+  --accent: oklch(0.945 0.020 10);                  /* rose-100, hover surface */
+  --accent-foreground: oklch(0.375 0.060 10);       /* rose-800 */
+
+  --destructive: oklch(0.572 0.110 22);             /* dusty red, refined */
+  --destructive-foreground: oklch(0.992 0.003 50);
+
+  --border: oklch(0.918 0.005 50);                  /* stone-200 ish */
+  --input: oklch(0.918 0.005 50);
+  --ring: oklch(0.745 0.070 10);                    /* rose-400, focus ring */
+}
+
+/* ---------- Dark theme (structure stub — to be tuned later) ---------- */
+.dark {
+  --background: oklch(0.180 0.010 50);
+  --foreground: oklch(0.945 0.005 50);
+
+  --card: oklch(0.220 0.010 50);
+  --card-foreground: oklch(0.945 0.005 50);
+
+  --popover: oklch(0.220 0.010 50);
+  --popover-foreground: oklch(0.945 0.005 50);
+
+  --primary: oklch(0.745 0.070 10);
+  --primary-foreground: oklch(0.180 0.010 50);
+
+  --secondary: oklch(0.270 0.010 50);
+  --secondary-foreground: oklch(0.945 0.005 50);
+
+  --muted: oklch(0.270 0.010 50);
+  --muted-foreground: oklch(0.665 0.010 50);
+
+  --accent: oklch(0.330 0.040 10);
+  --accent-foreground: oklch(0.895 0.035 10);
+
+  --destructive: oklch(0.598 0.180 25);
+  --destructive-foreground: oklch(0.992 0.003 50);
+
+  --border: oklch(0.330 0.008 50);
+  --input: oklch(0.330 0.008 50);
+  --ring: oklch(0.665 0.080 10);
+}
+
+/* ---------- Base element resets ---------- */
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  *,
+  *::before,
+  *::after {
+    border-color: var(--border);
+  }
+}

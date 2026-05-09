@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { Calendar as CalendarIcon } from 'lucide-react';
 import { Day } from '../domain/day.js';
 import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from '../domain/types.js';
+import { cn } from '../lib/utils.js';
 import { DailyActualStrip } from './DailyActualStrip.js';
 
 const PX_PER_MIN = 1;
 const SNAP_MIN = 15;
 const FREEFORM_DEFAULT_DURATION = 30;
 const DEFAULT_LABEL = '新規ブロック';
-const FALLBACK_BLOCK_COLOR = '#64748b';
+const FALLBACK_BLOCK_COLOR = '#A39A92';
 const MIN_DRAG_DURATION = 15;
+const TIME_GUTTER_PX = 56;
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
@@ -225,15 +228,16 @@ export function DayView(props: DayViewProps) {
         ref={scrollContainerRef}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        style={{
-          flex: 1,
-          overflow: 'auto',
-          position: 'relative',
-          background: '#fafafa',
-          userSelect: isDragging ? 'none' : 'auto',
-        }}
+        className={cn(
+          'flex-1 overflow-auto relative bg-background',
+          isDragging ? 'select-none' : 'select-auto',
+        )}
       >
-        <div style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}>
+        <div
+          className="relative"
+          style={{ height: `${1440 * PX_PER_MIN}px`, marginLeft: `${TIME_GUTTER_PX}px` }}
+        >
+          {/* 30-minute click slots */}
           {Array.from({ length: 48 }).map((_, i) => {
             const minute = i * 30;
             return (
@@ -241,42 +245,51 @@ export function DayView(props: DayViewProps) {
                 key={`slot-${i}`}
                 onDoubleClick={() => handleCreateAt(minute)}
                 onMouseDown={handleSlotMouseDown}
-                onMouseEnter={(e) => { if (!isDragging) e.currentTarget.style.background = 'rgba(99,102,241,0.08)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                className={cn(
+                  'absolute inset-x-0 transition-colors duration-100',
+                  isDragging
+                    ? 'cursor-ns-resize'
+                    : 'cursor-pointer hover:bg-accent/40',
+                )}
                 style={{
-                  position: 'absolute',
                   top: `${minute * PX_PER_MIN}px`,
-                  left: 0,
-                  right: 0,
                   height: `${30 * PX_PER_MIN}px`,
-                  background: 'transparent',
-                  transition: 'background 80ms',
-                  cursor: isDragging ? 'ns-resize' : 'pointer',
                 }}
               />
             );
           })}
 
+          {/* Hour lines + 30-minute subdivision lines */}
           {Array.from({ length: 25 }).map((_, h) => (
-            <div key={h} style={{
-              position: 'absolute',
-              top: `${h * 60 * PX_PER_MIN}px`,
-              left: '-52px',
-              right: 0,
-              borderTop: '1px solid #e5e7eb',
-              pointerEvents: 'none',
-            }}>
-              <span style={{ position: 'absolute', top: '-8px', left: '8px', fontSize: '11px', color: '#9ca3af', background: '#fafafa', padding: '0 2px' }}>
+            <div
+              key={`hour-${h}`}
+              className="absolute right-0 border-t border-border pointer-events-none"
+              style={{
+                top: `${h * 60 * PX_PER_MIN}px`,
+                left: `-${TIME_GUTTER_PX}px`,
+              }}
+            >
+              <span
+                className="absolute text-[11px] text-muted-foreground bg-background px-1 -translate-y-1/2"
+                style={{ left: '8px', top: 0 }}
+              >
                 {pad2(h)}:00
               </span>
             </div>
           ))}
+          {Array.from({ length: 24 }).map((_, h) => (
+            <div
+              key={`half-${h}`}
+              className="absolute inset-x-0 border-t border-border/40 pointer-events-none"
+              style={{ top: `${(h * 60 + 30) * PX_PER_MIN}px` }}
+            />
+          ))}
 
+          {/* Blocks */}
           {blocks.map((b) => {
             const color = blockColor(b);
             const proj = b.projectId !== undefined ? projectById.get(b.projectId) : undefined;
             const isGcal = b.source === 'gcal';
-            const stripeBg = `repeating-linear-gradient(45deg, ${color}, ${color} 6px, rgba(255,255,255,0.18) 6px, rgba(255,255,255,0.18) 12px)`;
             return (
               <div
                 key={b.id}
@@ -288,30 +301,39 @@ export function DayView(props: DayViewProps) {
                 }}
                 onMouseDown={(e) => { if (isGcal) e.stopPropagation(); }}
                 title={isGcal ? `${b.label}\n(Google Calendar の予定 — ダブルクリックで案件割当)` : 'ダブルクリックで編集'}
+                className={cn(
+                  'absolute rounded-lg overflow-hidden transition-shadow text-xs px-2 py-1',
+                  isGcal
+                    ? 'cursor-default text-foreground'
+                    : 'cursor-grab text-white hover:shadow-md',
+                )}
                 style={{
-                  position: 'absolute',
                   top: `${b.start * PX_PER_MIN}px`,
-                  left: '6px',
-                  right: '14px',
+                  left: '8px',
+                  right: '16px',
                   height: `${b.durationMin * PX_PER_MIN}px`,
-                  background: isGcal ? stripeBg : color,
-                  color: 'white',
-                  borderRadius: '5px',
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  overflow: 'hidden',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-                  cursor: isGcal ? 'default' : 'grab',
-                  opacity: isGcal ? 0.85 : 1,
-                  borderLeft: isGcal ? '3px solid rgba(0,0,0,0.35)' : undefined,
+                  background: isGcal ? `${color}22` : color,
+                  border: isGcal ? `1.5px dashed ${color}99` : undefined,
+                  borderLeft: isGcal ? `4px solid ${color}` : undefined,
+                  boxShadow: isGcal ? undefined : 'var(--shadow-soft)',
                 }}
               >
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {isGcal && <span style={{ fontSize: 9, opacity: 0.9 }}>📅</span>}
-                  <span>{b.label}</span>
+                <div className="flex items-center gap-1.5 truncate leading-tight">
+                  {isGcal && (
+                    <CalendarIcon
+                      className="size-2.5 shrink-0"
+                      style={{ color }}
+                    />
+                  )}
+                  <span className="truncate font-medium">{b.label}</span>
                 </div>
                 {b.durationMin >= 25 && (
-                  <div style={{ fontSize: '10px', opacity: 0.85, marginTop: '2px' }}>
+                  <div
+                    className={cn(
+                      'text-[10px] mt-0.5 truncate',
+                      isGcal ? 'text-foreground/65' : 'opacity-85',
+                    )}
+                  >
                     {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
                     {proj !== undefined && <span> · {proj.name}</span>}
                     {isGcal && proj === undefined && <span> · GCal</span>}
@@ -321,27 +343,25 @@ export function DayView(props: DayViewProps) {
             );
           })}
 
+          {/* Drag-create preview */}
           {dragPreview !== null && (
             <div
+              className={cn(
+                'absolute rounded-lg px-2 py-1 text-[11px] font-semibold pointer-events-none z-10',
+                'border-2 border-dashed',
+                dragPreview.overlaps
+                  ? 'bg-destructive/15 border-destructive text-destructive'
+                  : 'bg-primary/12 border-primary text-primary',
+              )}
               style={{
-                position: 'absolute',
                 top: `${dragPreview.a * PX_PER_MIN}px`,
                 height: `${dragPreview.duration * PX_PER_MIN}px`,
-                left: '6px',
-                right: '14px',
-                background: dragPreview.overlaps ? 'rgba(220, 38, 38, 0.18)' : 'rgba(37, 99, 235, 0.18)',
-                border: `2px dashed ${dragPreview.overlaps ? '#dc2626' : '#2563eb'}`,
-                borderRadius: '5px',
-                padding: '4px 8px',
-                color: dragPreview.overlaps ? '#991b1b' : '#1e40af',
-                fontSize: '11px',
-                fontWeight: 600,
-                pointerEvents: 'none',
-                zIndex: 5,
+                left: '8px',
+                right: '16px',
               }}
             >
               {formatMinute(dragPreview.a)} – {formatMinute(dragPreview.b)} ({dragPreview.duration}分)
-              {dragPreview.overlaps && <span style={{ marginLeft: '6px' }}>⚠ 重なり</span>}
+              {dragPreview.overlaps && <span className="ml-1.5">⚠ 重なり</span>}
             </div>
           )}
         </div>

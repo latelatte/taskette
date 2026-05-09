@@ -15,6 +15,35 @@ import { useGcalAuth } from './gcal/useGcalAuth.js';
 import { useGcalSync } from './gcal/useGcalSync.js';
 import { useGcalCalendarList } from './gcal/useGcalCalendarList.js';
 import { mergeDayBlocks } from './gcal/merge.js';
+import {
+  BarChart3,
+  ChevronLeft,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Plus,
+  Settings2,
+} from 'lucide-react';
+import { cn } from './lib/utils.js';
+import { Button } from './components/ui/button.js';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './components/ui/dialog.js';
+import { Input } from './components/ui/input.js';
+import { Label } from './components/ui/label.js';
+import { Checkbox } from './components/ui/checkbox.js';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './components/ui/select.js';
 
 const SELECTED_CALENDAR_KEY = 'taskette/gcal-calendar-id';
 
@@ -566,96 +595,118 @@ export function App() {
   })();
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '1fr' : '240px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
+    <div
+      className={cn(
+        'h-screen grid bg-background text-foreground',
+        sidebarCollapsed ? 'grid-cols-[1fr]' : 'grid-cols-[240px_1fr]',
+      )}
+    >
       {!sidebarCollapsed && (
-      <aside style={{ background: '#f3f4f6', padding: '16px', borderRight: '1px solid #e5e7eb', overflow: 'auto' }}>
-        <h2 style={{ fontSize: '13px', margin: '0 0 8px', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          テンプレート
-        </h2>
-        {templates.length === 0 && (
-          <div style={{ fontSize: '11px', color: '#9ca3af', padding: '4px 6px' }}>テンプレート未登録</div>
-        )}
-        {templates.map((t) => {
-          const proj = t.projectId !== undefined ? projectById.get(t.projectId) : undefined;
-          const accent = proj?.color ?? t.color ?? '#94a3b8';
-          const dragEnabled = viewMode === 'day';
-          return (
-            <div
-              key={t.id}
-              draggable={dragEnabled}
-              onDragStart={(e) => handleTemplateDragStart(e, t.id)}
-              title={dragEnabled ? undefined : '日ビューで配置できます'}
-              style={{
-                background: 'white',
-                border: '1px solid #e5e7eb',
-                borderLeft: `6px solid ${accent}`,
-                padding: '8px 10px',
-                marginBottom: '6px',
-                borderRadius: '6px',
-                cursor: dragEnabled ? 'grab' : 'default',
-                fontSize: '13px',
-                userSelect: 'none',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-                opacity: dragEnabled ? 1 : 0.5,
-              }}
-            >
-              <div>{t.label}</div>
-              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                {t.defaultDurationMin}分{proj !== undefined && ` · ${proj.name}`}
-              </div>
+        <aside className="bg-muted/40 border-r overflow-auto p-4">
+          <h2 className="text-xs font-semibold tracking-widest text-muted-foreground uppercase mb-2">
+            テンプレート
+          </h2>
+          {templates.length === 0 && (
+            <div className="text-[11px] text-muted-foreground/70 px-1.5 py-1">
+              テンプレート未登録
             </div>
-          );
-        })}
-        <p style={{ fontSize: '11px', color: '#9ca3af', marginTop: '20px', lineHeight: 1.5 }}>
-          ・テンプレを D&amp;D で配置<br />
-          ・空き時間ダブルクリックで自由記入<br />
-          ・設置済みブロックもドラッグで移動<br />
-          ・ブロックをダブルクリックで編集
-        </p>
-      </aside>
+          )}
+          <div className="flex flex-col gap-1.5">
+            {templates.map((t) => {
+              const proj = t.projectId !== undefined ? projectById.get(t.projectId) : undefined;
+              const accent = proj?.color ?? t.color ?? '#94a3b8';
+              const dragEnabled = viewMode === 'day';
+              return (
+                <div
+                  key={t.id}
+                  draggable={dragEnabled}
+                  onDragStart={(e) => handleTemplateDragStart(e, t.id)}
+                  title={dragEnabled ? undefined : '日ビューで配置できます'}
+                  className={cn(
+                    'bg-card border rounded-md text-[13px] select-none',
+                    'pl-2.5 pr-2.5 py-2 transition-shadow',
+                    dragEnabled
+                      ? 'cursor-grab hover:shadow-sm'
+                      : 'cursor-default opacity-50',
+                  )}
+                  style={{
+                    borderLeft: `4px solid ${accent}`,
+                    boxShadow: 'var(--shadow-soft)',
+                  }}
+                >
+                  <div className="leading-tight">{t.label}</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    {t.defaultDurationMin}分{proj !== undefined && ` · ${proj.name}`}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted-foreground/80 mt-5 leading-relaxed">
+            ・テンプレを D&amp;D で配置<br />
+            ・空き時間ダブルクリックで自由記入<br />
+            ・設置済みブロックもドラッグで移動<br />
+            ・ブロックをダブルクリックで編集
+          </p>
+        </aside>
       )}
 
-      <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <header style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '16px', background: 'white' }}>
-          <button
+      <main className="flex flex-col overflow-hidden">
+        <header className="flex items-center gap-4 border-b bg-card/80 backdrop-blur-sm px-4 py-2.5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setSidebarCollapsed((c) => !c)}
             title={sidebarCollapsed ? 'サイドバーを表示' : 'サイドバーを隠す'}
             aria-label="サイドバー切替"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#374151', padding: '2px 6px', lineHeight: 1 }}
-          >☰</button>
-          <h1 style={{ fontSize: '15px', margin: 0, fontWeight: 600 }}>taskette</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <button
+          >
+            {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+          </Button>
+          <h1 className="text-base font-semibold tracking-tight">taskette</h1>
+
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="icon-sm"
               onClick={() => navigateToDate(shiftViewDate(currentDate, viewMode, -1))}
               title="前へ"
-              style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#1f2937' }}
-            >◀</button>
-            <span style={{ fontSize: '13px', minWidth: '220px', textAlign: 'center', color: '#1f2937', fontWeight: isToday && viewMode === 'day' ? 600 : 400 }}>
-              {headerDateLabel}{isToday && viewMode === 'day' && <span style={{ marginLeft: '6px', fontSize: '10px', color: '#2563eb' }}>(今日)</span>}
+              aria-label="前へ"
+            >
+              <ChevronLeft />
+            </Button>
+            <span
+              className={cn(
+                'text-sm min-w-[220px] text-center text-foreground',
+                isToday && viewMode === 'day' ? 'font-semibold' : 'font-normal',
+              )}
+            >
+              {headerDateLabel}
+              {isToday && viewMode === 'day' && (
+                <span className="ml-1.5 text-[10px] text-primary">(今日)</span>
+              )}
             </span>
-            <button
+            <Button
+              variant="outline"
+              size="icon-sm"
               onClick={() => navigateToDate(shiftViewDate(currentDate, viewMode, 1))}
               title="次へ"
-              style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#1f2937' }}
-            >▶</button>
-            <button
+              aria-label="次へ"
+            >
+              <ChevronRight />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => navigateToDate(today())}
               disabled={isToday && viewMode === 'day'}
               title="今日へジャンプ"
-              style={{
-                background: isToday && viewMode === 'day' ? '#f3f4f6' : 'white',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                padding: '4px 10px',
-                fontSize: '12px',
-                cursor: isToday && viewMode === 'day' ? 'not-allowed' : 'pointer',
-                color: '#1f2937',
-                marginLeft: '6px',
-                opacity: isToday && viewMode === 'day' ? 0.5 : 1,
-              }}
-            >今日</button>
+              className="ml-1.5"
+            >
+              今日
+            </Button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0', marginLeft: '8px' }}>
+
+          <div className="flex items-center -space-x-px ml-2">
             {(['day', 'week', 'month', 'year'] as const).map((m, i) => {
               const active = viewMode === m;
               const label = m === 'day' ? '日' : m === 'week' ? '週' : m === 'month' ? '月' : '年';
@@ -663,33 +714,43 @@ export function App() {
                 <button
                   key={m}
                   onClick={() => navigateToDate(currentDate, m)}
-                  style={{
-                    background: active ? '#1f2937' : 'white',
-                    color: active ? 'white' : '#374151',
-                    border: '1px solid #d1d5db',
-                    borderLeftWidth: i === 0 ? 1 : 0,
-                    padding: '4px 12px',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    borderRadius: i === 0 ? '4px 0 0 4px' : i === 3 ? '0 4px 4px 0' : '0',
-                    fontWeight: active ? 600 : 400,
-                  }}
-                >{label}</button>
+                  className={cn(
+                    'border px-3 py-1 text-xs transition-colors cursor-pointer',
+                    i === 0 && 'rounded-l-md',
+                    i === 3 && 'rounded-r-md',
+                    active
+                      ? 'bg-foreground text-background border-foreground z-10 font-semibold'
+                      : 'bg-card text-foreground border-border hover:bg-accent hover:text-accent-foreground',
+                  )}
+                >
+                  {label}
+                </button>
               );
             })}
           </div>
-          <div style={{ flex: 1 }} />
-          {error !== null && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
-          <button
+
+          <div className="flex-1" />
+          {error !== null && (
+            <span className="text-destructive text-xs">{error}</span>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setShowSummary(true)}
             title={`${formatJaYearMonth(yearMonthOf(currentDate))}のサマリー`}
-            style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '13px', cursor: 'pointer', color: '#1f2937' }}
-          >📊</button>
-          <button
+            aria-label="月次サマリー"
+          >
+            <BarChart3 />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={openSettings}
             title="設定"
-            style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '13px', cursor: 'pointer', color: '#1f2937' }}
-          >⚙</button>
+            aria-label="設定"
+          >
+            <Settings2 />
+          </Button>
         </header>
 
         {viewMode === 'day' && (
@@ -733,929 +794,746 @@ export function App() {
         )}
       </main>
 
-      {showSettings && (
-        <div
-          onClick={closeSettings}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'white',
-              borderRadius: '8px',
-              padding: '20px',
-              minWidth: '520px',
-              maxWidth: '90vw',
-              maxHeight: '85vh',
-              overflow: 'auto',
-              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                {settingsView !== 'menu' && (
-                  <button
-                    onClick={() => setSettingsView('menu')}
-                    aria-label="戻る"
-                    title="設定メニューへ戻る"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
-                  >←</button>
+      <Dialog open={showSettings} onOpenChange={(open) => { if (!open) closeSettings(); }}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-1 text-base">
+              {settingsView !== 'menu' && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setSettingsView('menu')}
+                  aria-label="戻る"
+                  title="設定メニューへ戻る"
+                  className="-ml-1"
+                >
+                  <ChevronLeft />
+                </Button>
+              )}
+              <span>{SETTINGS_TITLES[settingsView]}</span>
+            </DialogTitle>
+          </DialogHeader>
+
+          {settingsView === 'menu' && (
+            <div className="flex flex-col gap-2">
+              {[
+                { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
+                { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
+                { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setSettingsView(item.key)}
+                  className="flex items-center justify-between gap-3 px-3.5 py-3 bg-card border border-border rounded-md cursor-pointer text-left text-foreground transition-colors hover:bg-accent/40 hover:border-border"
+                >
+                  <div>
+                    <div className="text-[13px] font-semibold">{item.label}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">{item.desc}</div>
+                  </div>
+                  <ChevronRight className="size-4 text-muted-foreground" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {settingsView === 'projects' && (
+            <>
+              <div className="mb-4">
+                {projects.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">案件が登録されておりません</div>
+                ) : (
+                  projects.map((p) => {
+                    const pickerOpen = colorPickerProjectId === p.id;
+                    return (
+                      <div key={p.id} className="py-2 border-b border-border/60">
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => setColorPickerProjectId(pickerOpen ? null : p.id)}
+                            title="色を変更"
+                            aria-label="色を変更"
+                            className={cn(
+                              'w-[18px] h-[18px] rounded shrink-0 cursor-pointer p-0 transition-shadow',
+                              pickerOpen ? 'ring-2 ring-foreground ring-offset-1' : 'border border-foreground/10',
+                            )}
+                            style={{ background: p.color }}
+                          />
+                          <Input
+                            value={p.name}
+                            onChange={(e) => renameProject(p.id, e.currentTarget.value)}
+                            placeholder="案件名"
+                            className="flex-1 h-8 text-[13px]"
+                          />
+                          <Input
+                            type="number"
+                            step={0.05}
+                            min={0}
+                            value={p.monthlyBudget ?? ''}
+                            onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
+                            placeholder="人月"
+                            title="月予算 (人月)"
+                            className="w-[70px] h-8 text-xs"
+                          />
+                          <Button
+                            size="xs"
+                            variant="destructive"
+                            onClick={() => handleDeleteProject(p.id)}
+                          >
+                            削除
+                          </Button>
+                        </div>
+                        {pickerOpen && (
+                          <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
+                            {PROJECT_COLOR_PALETTE.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => {
+                                  recolorProject(p.id, c);
+                                  setColorPickerProjectId(null);
+                                }}
+                                title={c}
+                                className={cn(
+                                  'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
+                                  p.color === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
+                                )}
+                                style={{ background: c }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
-                <h2 style={{ margin: 0, fontSize: '15px' }}>
-                  {SETTINGS_TITLES[settingsView]}
-                </h2>
               </div>
-              <button
-                onClick={closeSettings}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
-                aria-label="閉じる"
-              >×</button>
-            </div>
 
-            {settingsView === 'menu' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {[
-                  { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
-                  { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
-                  { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => setSettingsView(item.key)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '12px',
-                      padding: '12px 14px',
-                      background: 'white',
-                      border: '1px solid #e5e7eb',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      color: '#1f2937',
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{item.label}</div>
-                      <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>{item.desc}</div>
-                    </div>
-                    <span style={{ color: '#9ca3af', fontSize: '14px' }}>›</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {settingsView === 'projects' && (<>
-            <div style={{ marginBottom: '16px' }}>
-              {projects.length === 0 ? (
-                <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>案件が登録されておりません</div>
-              ) : (
-                projects.map((p) => {
-                  const pickerOpen = colorPickerProjectId === p.id;
-                  return (
-                    <div key={p.id} style={{ padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <button
-                          onClick={() => setColorPickerProjectId(pickerOpen ? null : p.id)}
-                          title="色を変更"
-                          aria-label="色を変更"
-                          style={{
-                            width: 18,
-                            height: 18,
-                            borderRadius: 4,
-                            background: p.color,
-                            border: pickerOpen ? '2px solid #1f2937' : '1px solid rgba(0,0,0,0.1)',
-                            flexShrink: 0,
-                            cursor: 'pointer',
-                            padding: 0,
-                          }}
-                        />
-                        <input
-                          value={p.name}
-                          onChange={(e) => renameProject(p.id, e.currentTarget.value)}
-                          placeholder="案件名"
-                          style={{ flex: 1, fontSize: '13px', padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: '4px', outline: 'none', background: 'white' }}
-                        />
-                        <input
-                          type="number"
-                          step="0.05"
-                          min="0"
-                          value={p.monthlyBudget ?? ''}
-                          onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
-                          placeholder="人月"
-                          title="月予算 (人月)"
-                          style={{ width: 70, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
-                        />
-                        <button
-                          onClick={() => handleDeleteProject(p.id)}
-                          style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
-                        >削除</button>
-                      </div>
-                      {pickerOpen && (
-                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', paddingLeft: '28px', flexWrap: 'wrap' }}>
-                          {PROJECT_COLOR_PALETTE.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => {
-                                recolorProject(p.id, c);
-                                setColorPickerProjectId(null);
-                              }}
-                              title={c}
-                              style={{
-                                width: 22,
-                                height: 22,
-                                borderRadius: 4,
-                                background: c,
-                                border: p.color === c ? '2px solid #1f2937' : '2px solid transparent',
-                                cursor: 'pointer',
-                                padding: 0,
-                              }}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
-              <div style={{ fontSize: '12px', color: '#374151', marginBottom: '8px', fontWeight: 600 }}>新しい案件を追加</div>
-              <input
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
-                }}
-                placeholder="案件名"
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  fontSize: '13px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  boxSizing: 'border-box',
-                  outline: 'none',
-                }}
-              />
-              <input
-                type="number"
-                step="0.05"
-                min="0"
-                value={newProjectBudget}
-                onChange={(e) => setNewProjectBudget(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
-                }}
-                placeholder="月予算 (人月、任意)"
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  fontSize: '13px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  boxSizing: 'border-box',
-                  marginTop: '8px',
-                  outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
-                {PROJECT_COLOR_PALETTE.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setNewProjectColor(c)}
-                    title={c}
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: 4,
-                      background: c,
-                      border: newProjectColor === c ? '2px solid #1f2937' : '2px solid transparent',
-                      cursor: 'pointer',
-                      padding: 0,
-                    }}
-                  />
-                ))}
-              </div>
-              <button
-                onClick={submitNewProject}
-                disabled={newProjectName.trim().length === 0}
-                style={{
-                  marginTop: '10px',
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  background: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  fontSize: '13px',
-                  cursor: newProjectName.trim().length > 0 ? 'pointer' : 'not-allowed',
-                  opacity: newProjectName.trim().length > 0 ? 1 : 0.5,
-                }}
-              >追加</button>
-            </div>
-            </>)}
-
-            {settingsView === 'templates' && (<>
-            <div style={{ marginBottom: '16px' }}>
-              {templates.length === 0 ? (
-                <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>テンプレートが登録されておりません</div>
-              ) : (
-                templates.map((t) => {
-                  const pickerOpen = colorPickerTemplateId === t.id;
-                  const swatchColor = t.color ?? (t.projectId !== undefined ? projectById.get(t.projectId)?.color : undefined) ?? '#94a3b8';
-                  return (
-                    <div key={t.id} style={{ padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <button
-                          onClick={() => setColorPickerTemplateId(pickerOpen ? null : t.id)}
-                          title="色を変更"
-                          aria-label="色を変更"
-                          style={{
-                            width: 18,
-                            height: 18,
-                            borderRadius: 4,
-                            background: swatchColor,
-                            border: pickerOpen ? '2px solid #1f2937' : '1px solid rgba(0,0,0,0.1)',
-                            flexShrink: 0,
-                            cursor: 'pointer',
-                            padding: 0,
-                          }}
-                        />
-                        <input
-                          value={t.label}
-                          onChange={(e) => renameTemplate(t.id, e.currentTarget.value)}
-                          placeholder="ラベル"
-                          style={{ flex: 1, fontSize: '13px', padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: '4px', outline: 'none', background: 'white' }}
-                        />
-                        <input
-                          type="number"
-                          min="1"
-                          max="1440"
-                          step="5"
-                          value={t.defaultDurationMin}
-                          onChange={(e) => updateTemplateDuration(t.id, e.currentTarget.value)}
-                          title="既定時間 (分)"
-                          style={{ width: 64, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
-                        />
-                        <select
-                          value={t.projectId ?? ''}
-                          onChange={(e) => updateTemplateProject(t.id, e.currentTarget.value)}
-                          title="案件"
-                          style={{ maxWidth: 120, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none', background: 'white', color: '#1f2937' }}
-                        >
-                          <option value="">— 未割当 —</option>
-                          {projects.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => handleDeleteTemplate(t.id)}
-                          style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
-                        >削除</button>
-                      </div>
-                      {pickerOpen && (
-                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', paddingLeft: '28px', flexWrap: 'wrap' }}>
-                          {PROJECT_COLOR_PALETTE.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => {
-                                recolorTemplate(t.id, c);
-                                setColorPickerTemplateId(null);
-                              }}
-                              title={c}
-                              style={{
-                                width: 22,
-                                height: 22,
-                                borderRadius: 4,
-                                background: c,
-                                border: t.color === c ? '2px solid #1f2937' : '2px solid transparent',
-                                cursor: 'pointer',
-                                padding: 0,
-                              }}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
-              <div style={{ fontSize: '12px', color: '#374151', marginBottom: '8px', fontWeight: 600 }}>新しいテンプレートを追加</div>
-              <input
-                value={newTemplateLabel}
-                onChange={(e) => setNewTemplateLabel(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
-                }}
-                placeholder="ラベル (例: ☕ コーヒー)"
-                style={{
-                  width: '100%',
-                  padding: '6px 8px',
-                  fontSize: '13px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  boxSizing: 'border-box',
-                  outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                <input
+              <div className="border-t border-border/60 pt-3.5 space-y-2">
+                <div className="text-xs text-foreground/85 font-semibold">新しい案件を追加</div>
+                <Input
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
+                  }}
+                  placeholder="案件名"
+                />
+                <Input
                   type="number"
-                  min="1"
-                  max="1440"
-                  step="5"
-                  value={newTemplateDuration}
-                  onChange={(e) => setNewTemplateDuration(e.target.value)}
+                  step={0.05}
+                  min={0}
+                  value={newProjectBudget}
+                  onChange={(e) => setNewProjectBudget(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
+                  }}
+                  placeholder="月予算 (人月、任意)"
+                />
+                <div className="flex gap-1.5 flex-wrap">
+                  {PROJECT_COLOR_PALETTE.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setNewProjectColor(c)}
+                      title={c}
+                      className={cn(
+                        'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
+                        newProjectColor === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
+                      )}
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+                <Button
+                  onClick={submitNewProject}
+                  disabled={newProjectName.trim().length === 0}
+                  className="w-full"
+                >
+                  <Plus />
+                  追加
+                </Button>
+              </div>
+            </>
+          )}
+
+          {settingsView === 'templates' && (
+            <>
+              <div className="mb-4">
+                {templates.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">テンプレートが登録されておりません</div>
+                ) : (
+                  templates.map((t) => {
+                    const pickerOpen = colorPickerTemplateId === t.id;
+                    const swatchColor = t.color ?? (t.projectId !== undefined ? projectById.get(t.projectId)?.color : undefined) ?? '#A39A92';
+                    return (
+                      <div key={t.id} className="py-2 border-b border-border/60">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setColorPickerTemplateId(pickerOpen ? null : t.id)}
+                            title="色を変更"
+                            aria-label="色を変更"
+                            className={cn(
+                              'w-[18px] h-[18px] rounded shrink-0 cursor-pointer p-0 transition-shadow',
+                              pickerOpen ? 'ring-2 ring-foreground ring-offset-1' : 'border border-foreground/10',
+                            )}
+                            style={{ background: swatchColor }}
+                          />
+                          <Input
+                            value={t.label}
+                            onChange={(e) => renameTemplate(t.id, e.currentTarget.value)}
+                            placeholder="ラベル"
+                            className="flex-1 h-8 text-[13px]"
+                          />
+                          <Input
+                            type="number"
+                            min={1}
+                            max={1440}
+                            step={5}
+                            value={t.defaultDurationMin}
+                            onChange={(e) => updateTemplateDuration(t.id, e.currentTarget.value)}
+                            title="既定時間 (分)"
+                            className="w-16 h-8 text-xs"
+                          />
+                          <Select
+                            value={t.projectId ?? '__unassigned__'}
+                            onValueChange={(v) => updateTemplateProject(t.id, v === '__unassigned__' ? '' : v)}
+                          >
+                            <SelectTrigger className="max-w-[120px] h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__unassigned__">— 未割当 —</SelectItem>
+                              {projects.map((p) => (
+                                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="xs"
+                            variant="destructive"
+                            onClick={() => handleDeleteTemplate(t.id)}
+                          >
+                            削除
+                          </Button>
+                        </div>
+                        {pickerOpen && (
+                          <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
+                            {PROJECT_COLOR_PALETTE.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={() => {
+                                  recolorTemplate(t.id, c);
+                                  setColorPickerTemplateId(null);
+                                }}
+                                title={c}
+                                className={cn(
+                                  'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
+                                  t.color === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
+                                )}
+                                style={{ background: c }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="border-t border-border/60 pt-3.5 space-y-2">
+                <div className="text-xs text-foreground/85 font-semibold">新しいテンプレートを追加</div>
+                <Input
+                  value={newTemplateLabel}
+                  onChange={(e) => setNewTemplateLabel(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
                   }}
-                  placeholder="分"
-                  title="既定時間 (分)"
-                  style={{
-                    width: 80,
-                    padding: '6px 8px',
-                    fontSize: '13px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '4px',
-                    outline: 'none',
-                  }}
+                  placeholder="ラベル (例: ☕ コーヒー)"
                 />
-                <select
-                  value={newTemplateProjectId}
-                  onChange={(e) => setNewTemplateProjectId(e.target.value)}
-                  style={{ flex: 1, padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none', background: 'white', color: '#1f2937' }}
-                >
-                  <option value="">— 案件未割当 —</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
-                {PROJECT_COLOR_PALETTE.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setNewTemplateColor(c)}
-                    title={c}
-                    style={{
-                      width: 22,
-                      height: 22,
-                      borderRadius: 4,
-                      background: c,
-                      border: newTemplateColor === c ? '2px solid #1f2937' : '2px solid transparent',
-                      cursor: 'pointer',
-                      padding: 0,
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    step={5}
+                    value={newTemplateDuration}
+                    onChange={(e) => setNewTemplateDuration(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
                     }}
+                    placeholder="分"
+                    title="既定時間 (分)"
+                    className="w-20"
                   />
-                ))}
-              </div>
-              <button
-                onClick={submitNewTemplate}
-                disabled={newTemplateLabel.trim().length === 0}
-                style={{
-                  marginTop: '10px',
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  background: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  fontSize: '13px',
-                  cursor: newTemplateLabel.trim().length > 0 ? 'pointer' : 'not-allowed',
-                  opacity: newTemplateLabel.trim().length > 0 ? 1 : 0.5,
-                }}
-              >追加</button>
-            </div>
-            </>)}
-
-            {settingsView === 'gcal' && (
-              <div>
-                <div style={{ fontSize: '12px', color: '#4b5563', lineHeight: 1.6, marginBottom: '14px' }}>
-                  Google Calendar の予定を読み取り専用で取り込みます。<br/>
-                  打ち合わせ等の予定に案件を割り当てて、工数集計に含められます。
+                  <Select
+                    value={newTemplateProjectId === '' ? '__unassigned__' : newTemplateProjectId}
+                    onValueChange={(v) => setNewTemplateProjectId(v === '__unassigned__' ? '' : v)}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__unassigned__">— 案件未割当 —</SelectItem>
+                      {projects.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-
-                {gcalAuth.status === 'unconfigured' && (
-                  <div style={{
-                    padding: '12px 14px',
-                    background: '#fef3c7',
-                    border: '1px solid #fcd34d',
-                    borderRadius: 6,
-                    fontSize: '12px',
-                    color: '#78350f',
-                    lineHeight: 1.6,
-                  }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Client ID が未設定です</div>
-                    <div>
-                      Google Cloud Console で OAuth 2.0 クライアント ID を発行し、<br/>
-                      プロジェクトルートに <code style={{ background: 'white', padding: '1px 5px', borderRadius: 3 }}>.env.local</code> を作成して下記を記述してください:
-                    </div>
-                    <pre style={{
-                      marginTop: 8,
-                      padding: '8px 10px',
-                      background: 'white',
-                      border: '1px solid #fcd34d',
-                      borderRadius: 4,
-                      fontSize: 11,
-                      overflowX: 'auto',
-                    }}>VITE_GOOGLE_CLIENT_ID=xxxxxxx.apps.googleusercontent.com</pre>
-                    <div style={{ marginTop: 6, fontSize: 11 }}>
-                      設定後 dev サーバを再起動してください。
-                    </div>
-                  </div>
-                )}
-
-                {gcalAuth.status !== 'unconfigured' && (
-                  <div style={{
-                    padding: '12px 14px',
-                    background: '#f9fafb',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 6,
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          background:
-                            gcalAuth.status === 'connected' ? '#22c55e'
-                            : gcalAuth.status === 'connecting' ? '#f59e0b'
-                            : gcalAuth.status === 'error' ? '#ef4444'
-                            : gcalAuth.status === 'loading' ? '#9ca3af'
-                            : '#cbd5e1',
-                        }} />
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#1f2937' }}>
-                          {gcalAuth.status === 'connected' && '接続済み'}
-                          {gcalAuth.status === 'connecting' && '接続中…'}
-                          {gcalAuth.status === 'disconnected' && '未接続'}
-                          {gcalAuth.status === 'loading' && '読み込み中…'}
-                          {gcalAuth.status === 'error' && 'エラー'}
-                        </div>
-                      </div>
-                      {gcalAuth.status === 'connected' ? (
-                        <button
-                          onClick={gcalAuth.disconnect}
-                          style={{
-                            padding: '6px 14px',
-                            borderRadius: 4,
-                            background: '#fee2e2',
-                            color: '#dc2626',
-                            border: 'none',
-                            fontSize: 12,
-                            cursor: 'pointer',
-                          }}
-                        >切断</button>
-                      ) : (
-                        <button
-                          onClick={gcalAuth.connect}
-                          disabled={gcalAuth.status === 'loading' || gcalAuth.status === 'connecting'}
-                          style={{
-                            padding: '6px 14px',
-                            borderRadius: 4,
-                            background: '#3b82f6',
-                            color: 'white',
-                            border: 'none',
-                            fontSize: 12,
-                            cursor: gcalAuth.status === 'loading' || gcalAuth.status === 'connecting' ? 'not-allowed' : 'pointer',
-                            opacity: gcalAuth.status === 'loading' || gcalAuth.status === 'connecting' ? 0.5 : 1,
-                          }}
-                        >Google で接続</button>
-                      )}
-                    </div>
-
-                    {gcalAuth.errorMessage !== null && (
-                      <div style={{ marginTop: 10, fontSize: 11, color: '#b91c1c' }}>
-                        {gcalAuth.errorMessage}
-                      </div>
-                    )}
-
-                    {gcalAuth.status === 'connected' && (
-                      <>
-                        <div style={{ marginTop: 10, fontSize: 11, color: '#6b7280', lineHeight: 1.6 }}>
-                          スコープ: 読み取り専用 (calendar.readonly)<br/>
-                          アクセストークンはメモリ保持。リロード後は popup なしで自動再接続を試みます (Google 側の session 切れ時のみ手動接続が必要)。
-                        </div>
-
-                        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
-                            同期するカレンダー
-                          </div>
-                          {gcalCalendars.status === 'loading' && (
-                            <div style={{ fontSize: 11, color: '#9ca3af' }}>カレンダー一覧を読み込み中…</div>
-                          )}
-                          {gcalCalendars.status === 'error' && (
-                            <div style={{ fontSize: 11, color: '#b91c1c' }}>
-                              カレンダー一覧取得エラー: {gcalCalendars.errorMessage}
-                            </div>
-                          )}
-                          {gcalCalendars.status === 'loaded' && (
-                            <>
-                              <select
-                                value={selectedCalendarId ?? ''}
-                                onChange={(e) => setSelectedCalendarId(e.currentTarget.value === '' ? null : e.currentTarget.value)}
-                                style={{
-                                  width: '100%',
-                                  padding: '6px 8px',
-                                  fontSize: 12,
-                                  border: '1px solid #d1d5db',
-                                  borderRadius: 4,
-                                  background: 'white',
-                                  color: '#1f2937',
-                                }}
-                              >
-                                <option value="">— 同期するカレンダーを選択 —</option>
-                                {gcalCalendars.calendars.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.isPrimary ? '★ ' : ''}{c.displayName}
-                                  </option>
-                                ))}
-                              </select>
-                              {selectedCalendarId !== null && !gcalCalendars.calendars.some((c) => c.id === selectedCalendarId) && (
-                                <div style={{ marginTop: 6, fontSize: 11, color: '#b45309' }}>
-                                  ⚠ 前回選択していたカレンダーが見つかりません。再選択してください。
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-
-                        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                            <div style={{ fontSize: 12, color: '#374151' }}>
-                              {gcalSync.status === 'syncing' && '同期中…'}
-                              {gcalSync.status === 'idle' && gcalSync.lastSyncedAt !== null && (
-                                <>最終同期: {new Date(gcalSync.lastSyncedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</>
-                              )}
-                              {gcalSync.status === 'idle' && gcalSync.lastSyncedAt === null && '未同期'}
-                              {gcalSync.status === 'error' && (
-                                <span style={{ color: '#b91c1c' }}>同期エラー</span>
-                              )}
-                            </div>
-                            <button
-                              onClick={gcalSync.refresh}
-                              disabled={gcalSync.status === 'syncing'}
-                              style={{
-                                padding: '4px 10px',
-                                fontSize: 11,
-                                background: 'white',
-                                color: '#1f2937',
-                                border: '1px solid #d1d5db',
-                                borderRadius: 4,
-                                cursor: gcalSync.status === 'syncing' ? 'not-allowed' : 'pointer',
-                                opacity: gcalSync.status === 'syncing' ? 0.5 : 1,
-                              }}
-                            >再同期</button>
-                          </div>
-                          {gcalSync.status === 'error' && (
-                            <div style={{ marginTop: 8, padding: '8px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, fontSize: 11, color: '#991b1b', lineHeight: 1.5 }}>
-                              {gcalSync.errorStatus === 401 || gcalSync.errorStatus === 403 ? (
-                                <>
-                                  <div style={{ fontWeight: 600 }}>セッションが切れています</div>
-                                  <div>自動再接続が失敗しました。下の「Google で接続」ボタンを押して再認証してください。</div>
-                                </>
-                              ) : gcalSync.errorStatus === 429 ? (
-                                <>
-                                  <div style={{ fontWeight: 600 }}>API リクエスト制限</div>
-                                  <div>しばらく待ってから再同期ボタンを押してくださいまし。</div>
-                                </>
-                              ) : gcalSync.errorStatus !== null && gcalSync.errorStatus >= 500 ? (
-                                <>
-                                  <div style={{ fontWeight: 600 }}>Google 側のサーバエラー</div>
-                                  <div>少し時間を置いて再同期してください ({gcalSync.errorStatus})</div>
-                                </>
-                              ) : (
-                                <>
-                                  <div style={{ fontWeight: 600 }}>同期エラー</div>
-                                  <div>{gcalSync.errorMessage ?? 'ネットワーク接続をご確認くださいまし'}</div>
-                                </>
-                              )}
-                            </div>
-                          )}
-                          <div style={{ marginTop: 6, fontSize: 11, color: '#9ca3af', lineHeight: 1.5 }}>
-                            {selectedCalendarId === null
-                              ? '※ カレンダーを選択すると表示中月 ±1ヶ月の予定を取得します'
-                              : '選択カレンダーの表示中月 ±1ヶ月を取得しています'}
-                          </div>
-                        </div>
-
-                        {(() => {
-                          const hidden = Object.entries(gcalAssignments).filter(([, a]) => a.hidden === true);
-                          if (hidden.length === 0) return null;
-                          return (
-                            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
-                              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
-                                非表示中のイベント ({hidden.length})
-                              </div>
-                              <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {hidden.map(([key, a]) => (
-                                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', background: '#f9fafb', borderRadius: 4, fontSize: 11 }}>
-                                    <span style={{ flex: 1, color: '#4b5563', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {a.summary ?? '(タイトル不明)'}
-                                    </span>
-                                    <button
-                                      onClick={() => restoreGcalAssignment(key)}
-                                      style={{ background: 'white', color: '#2563eb', border: '1px solid #d1d5db', borderRadius: 3, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}
-                                    >再表示</button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {(() => {
-                          const rules = Object.entries(gcalSummaryRules);
-                          if (rules.length === 0) return null;
-                          return (
-                            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
-                              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
-                                同名予定ルール ({rules.length})
-                              </div>
-                              <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {rules.map(([summary, r]) => {
-                                  const proj = r.projectId !== undefined ? projectById.get(r.projectId) : undefined;
-                                  return (
-                                    <div key={summary} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', background: '#f9fafb', borderRadius: 4, fontSize: 11 }}>
-                                      <span style={{ flex: 1, color: '#4b5563', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        {summary}
-                                      </span>
-                                      <span style={{
-                                        fontSize: 10,
-                                        padding: '1px 6px',
-                                        borderRadius: 3,
-                                        background: r.hidden === true ? '#fef3c7' : (proj?.color ?? '#e5e7eb'),
-                                        color: r.hidden === true ? '#92400e' : 'white',
-                                        whiteSpace: 'nowrap',
-                                      }}>
-                                        {r.hidden === true ? '非表示' : (proj?.name ?? '未割当')}
-                                      </span>
-                                      <button
-                                        onClick={() => setGcalSummaryRules((prev) => {
-                                          const { [summary]: _, ...rest } = prev;
-                                          return rest;
-                                        })}
-                                        style={{ background: 'white', color: '#dc2626', border: '1px solid #d1d5db', borderRadius: 3, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}
-                                      >削除</button>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {showSummary && (
-        <div
-          onClick={() => setShowSummary(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'white',
-              borderRadius: '8px',
-              padding: '20px',
-              minWidth: '420px',
-              maxWidth: '90vw',
-              maxHeight: '80vh',
-              overflow: 'auto',
-              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-            }}
-          >
-            {(() => {
-              const ym = yearMonthOf(currentDate);
-              const aggregate = aggregateMonthly(mergedBlocksByDate, ym);
-              const elapsed = elapsedRatio(ym);
-              const totalAssignedMin = Array.from(aggregate.byProject.values()).reduce((a, b) => a + b, 0);
-              const grandTotalMin = totalAssignedMin + aggregate.unassigned;
-              return (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                    <h2 style={{ margin: 0, fontSize: '15px' }}>{formatJaYearMonth(ym)}のサマリー</h2>
+                <div className="flex gap-1.5 flex-wrap">
+                  {PROJECT_COLOR_PALETTE.map((c) => (
                     <button
-                      onClick={() => setShowSummary(false)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
-                      aria-label="閉じる"
-                    >×</button>
+                      key={c}
+                      type="button"
+                      onClick={() => setNewTemplateColor(c)}
+                      title={c}
+                      className={cn(
+                        'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
+                        newTemplateColor === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
+                      )}
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+                <Button
+                  onClick={submitNewTemplate}
+                  disabled={newTemplateLabel.trim().length === 0}
+                  className="w-full"
+                >
+                  <Plus />
+                  追加
+                </Button>
+              </div>
+            </>
+          )}
+
+          {settingsView === 'gcal' && (
+            <div>
+              <div className="text-xs text-foreground/85 leading-relaxed mb-3.5">
+                Google Calendar の予定を読み取り専用で取り込みます。<br/>
+                打ち合わせ等の予定に案件を割り当てて、工数集計に含められます。
+              </div>
+
+              {gcalAuth.status === 'unconfigured' && (
+                <div className="px-3.5 py-3 rounded-md text-xs leading-relaxed" style={{ background: '#F0E5D0', border: '1px solid #E0CFA8', color: '#7A5530' }}>
+                  <div className="font-semibold mb-1.5">Client ID が未設定です</div>
+                  <div>
+                    Google Cloud Console で OAuth 2.0 クライアント ID を発行し、<br/>
+                    プロジェクトルートに <code className="bg-card px-1.5 py-px rounded text-[10px]">.env.local</code> を作成して下記を記述してください:
+                  </div>
+                  <pre className="mt-2 px-2.5 py-2 bg-card rounded text-[11px] overflow-x-auto" style={{ border: '1px solid #E0CFA8' }}>VITE_GOOGLE_CLIENT_ID=xxxxxxx.apps.googleusercontent.com</pre>
+                  <div className="mt-1.5 text-[11px]">
+                    設定後 dev サーバを再起動してください。
+                  </div>
+                </div>
+              )}
+
+              {gcalAuth.status !== 'unconfigured' && (
+                <div className="px-3.5 py-3 bg-muted/40 border rounded-md">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{
+                          background:
+                            gcalAuth.status === 'connected' ? '#7FA384'
+                            : gcalAuth.status === 'connecting' ? '#C29050'
+                            : gcalAuth.status === 'error' ? '#B85C5C'
+                            : gcalAuth.status === 'loading' ? '#B5B0A8'
+                            : '#D1CDC6',
+                        }}
+                      />
+                      <div className="text-[13px] font-semibold text-foreground">
+                        {gcalAuth.status === 'connected' && '接続済み'}
+                        {gcalAuth.status === 'connecting' && '接続中…'}
+                        {gcalAuth.status === 'disconnected' && '未接続'}
+                        {gcalAuth.status === 'loading' && '読み込み中…'}
+                        {gcalAuth.status === 'error' && 'エラー'}
+                      </div>
+                    </div>
+                    {gcalAuth.status === 'connected' ? (
+                      <Button size="sm" variant="outline" onClick={gcalAuth.disconnect}>
+                        切断
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={gcalAuth.connect}
+                        disabled={gcalAuth.status === 'loading' || gcalAuth.status === 'connecting'}
+                      >
+                        Google で接続
+                      </Button>
+                    )}
                   </div>
 
-                  {projects.length === 0 ? (
-                    <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>案件が登録されておりません</div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                      {projects.map((p) => {
-                        const minutes = aggregate.byProject.get(p.id) ?? 0;
-                        const u = projectBudgetUsage(p, minutes, elapsed, ym);
-                        const effectivePM = effectiveBudgetPM(p, ym);
-                        const hasOverride = p.monthlyBudgetOverrides?.[ym] !== undefined;
-                        const isEditingThis = editingMonthBudgetProjectId === p.id;
-                        const barColor = u.status === 'over'
-                          ? '#dc2626'
-                          : u.status === 'projectedOver'
-                            ? '#f97316'
-                            : (u.status === 'projectedUnder' || u.status === 'underConfirmed')
-                              ? '#f59e0b'
-                              : p.color;
-                        return (
-                          <div key={p.id}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                              <span style={{ width: 10, height: 10, borderRadius: 2, background: p.color, flexShrink: 0 }} />
-                              <span style={{ fontSize: '13px', flex: 1 }}>{p.name}</span>
-                              <span style={{ fontSize: '12px', color: '#374151' }}>
-                                {u.actualPM.toFixed(2)}人月 ({u.actualH.toFixed(1)}h)
-                                {effectivePM !== undefined && (
-                                  <span style={{ color: '#6b7280' }}>
-                                    {' / '}{effectivePM}人月 ({Math.round(u.ratio * 100)}%)
-                                    {hasOverride && (
-                                      <span style={{ marginLeft: '4px', color: '#2563eb', fontSize: '10px', fontWeight: 600 }}>(今月のみ)</span>
-                                    )}
-                                  </span>
-                                )}
-                              </span>
-                              <button
-                                onClick={() => isEditingThis ? cancelEditMonthBudget() : beginEditMonthBudget(p.id, effectivePM)}
-                                title="今月の予算を変更"
-                                aria-label="今月の予算を変更"
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: isEditingThis ? '#2563eb' : '#9ca3af', padding: '0 4px' }}
-                              >✎</button>
-                            </div>
-                            {isEditingThis && (
-                              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', paddingLeft: '18px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <input
-                                  type="number"
-                                  step="0.05"
-                                  min="0"
-                                  value={editingMonthBudgetValue}
-                                  onChange={(e) => setEditingMonthBudgetValue(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveMonthBudgetOverride(p.id, ym);
-                                    else if (e.key === 'Escape') cancelEditMonthBudget();
-                                  }}
-                                  autoFocus
-                                  placeholder="人月"
-                                  style={{ width: 80, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
-                                />
-                                <button
-                                  onClick={() => saveMonthBudgetOverride(p.id, ym)}
-                                  disabled={editingMonthBudgetValue.trim() === ''}
-                                  style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: editingMonthBudgetValue.trim() === '' ? 'not-allowed' : 'pointer', opacity: editingMonthBudgetValue.trim() === '' ? 0.5 : 1 }}
-                                >保存</button>
-                                {hasOverride && (
-                                  <button
-                                    onClick={() => clearMonthBudgetOverride(p.id, ym)}
-                                    title="今月のオーバーライドを解除して通常の予算に戻す"
-                                    style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
-                                  >解除</button>
-                                )}
-                                <button
-                                  onClick={cancelEditMonthBudget}
-                                  style={{ background: 'white', color: '#6b7280', border: '1px solid #d1d5db', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
-                                >キャンセル</button>
-                              </div>
-                            )}
-                            {u.budgetH !== null && (
-                              <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
-                                <div style={{
-                                  width: `${u.barFraction * 100}%`,
-                                  height: '100%',
-                                  background: barColor,
-                                  transition: 'width 200ms',
-                                }} />
-                              </div>
-                            )}
-                            {u.budgetH !== null && u.lowH !== null && u.highH !== null && (
-                              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px' }}>
-                                許容 {fmtH(u.lowH)}h–{fmtH(u.highH)}h（±{fmtH(u.toleranceH)}h）
-                              </div>
-                            )}
-                            {u.status === 'over' && u.highH !== null && (
-                              <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '2px' }}>
-                                ⚠ 超過 ({(u.actualH - u.highH).toFixed(1)}h オーバー)
-                              </div>
-                            )}
-                            {u.status === 'underConfirmed' && u.lowH !== null && (
-                              <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
-                                ⚠ 不足 ({(u.lowH - u.actualH).toFixed(1)}h 不足、月末確定)
-                              </div>
-                            )}
-                            {u.status === 'projectedOver' && u.projection !== null && (
-                              <div style={{ fontSize: '11px', color: '#f97316', marginTop: '2px' }}>
-                                ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容を超過する見込み）
-                              </div>
-                            )}
-                            {u.status === 'projectedUnder' && u.projection !== null && (
-                              <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
-                                ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容に届かない見込み）
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                  {gcalAuth.errorMessage !== null && (
+                    <div className="mt-2.5 text-[11px]" style={{ color: '#B85C5C' }}>
+                      {gcalAuth.errorMessage}
                     </div>
                   )}
 
-                  <div style={{ borderTop: '1px solid #e5e7eb', marginTop: '18px', paddingTop: '12px', fontSize: '12px', color: '#374151' }}>
-                    <div>合計実績: {(grandTotalMin / 60).toFixed(1)}h（割当: {(totalAssignedMin / 60).toFixed(1)}h, 未割当: {(aggregate.unassigned / 60).toFixed(1)}h）</div>
-                    <div style={{ color: '#6b7280', marginTop: '4px' }}>
-                      月の経過: {Math.round(elapsed * 100)}%
-                    </div>
+                  {gcalAuth.status === 'connected' && (
+                    <>
+                      <div className="mt-2.5 text-[11px] text-muted-foreground leading-relaxed">
+                        スコープ: 読み取り専用 (calendar.readonly)<br/>
+                        アクセストークンはメモリ保持。リロード後は popup なしで自動再接続を試みます (Google 側の session 切れ時のみ手動接続が必要)。
+                      </div>
+
+                      <div className="mt-3 pt-2.5 border-t border-border/60">
+                        <div className="text-xs font-semibold text-foreground/85 mb-1.5">
+                          同期するカレンダー
+                        </div>
+                        {gcalCalendars.status === 'loading' && (
+                          <div className="text-[11px] text-muted-foreground">カレンダー一覧を読み込み中…</div>
+                        )}
+                        {gcalCalendars.status === 'error' && (
+                          <div className="text-[11px]" style={{ color: '#B85C5C' }}>
+                            カレンダー一覧取得エラー: {gcalCalendars.errorMessage}
+                          </div>
+                        )}
+                        {gcalCalendars.status === 'loaded' && (
+                          <>
+                            <Select
+                              value={selectedCalendarId ?? '__none__'}
+                              onValueChange={(v) => setSelectedCalendarId(v === '__none__' ? null : v)}
+                            >
+                              <SelectTrigger className="w-full text-xs">
+                                <SelectValue placeholder="同期するカレンダーを選択" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="__none__">— 同期するカレンダーを選択 —</SelectItem>
+                                {gcalCalendars.calendars.map((c) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.isPrimary ? '★ ' : ''}{c.displayName}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            {selectedCalendarId !== null && !gcalCalendars.calendars.some((c) => c.id === selectedCalendarId) && (
+                              <div className="mt-1.5 text-[11px]" style={{ color: '#A0623A' }}>
+                                ⚠ 前回選択していたカレンダーが見つかりません。再選択してください。
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      <div className="mt-3 pt-2.5 border-t border-border/60">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs text-foreground/85">
+                            {gcalSync.status === 'syncing' && '同期中…'}
+                            {gcalSync.status === 'idle' && gcalSync.lastSyncedAt !== null && (
+                              <>最終同期: {new Date(gcalSync.lastSyncedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</>
+                            )}
+                            {gcalSync.status === 'idle' && gcalSync.lastSyncedAt === null && '未同期'}
+                            {gcalSync.status === 'error' && (
+                              <span style={{ color: '#B85C5C' }}>同期エラー</span>
+                            )}
+                          </div>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={gcalSync.refresh}
+                            disabled={gcalSync.status === 'syncing'}
+                          >
+                            再同期
+                          </Button>
+                        </div>
+                        {gcalSync.status === 'error' && (
+                          <div className="mt-2 px-2.5 py-2 rounded text-[11px] leading-relaxed" style={{ background: '#EFD6D6', border: '1px solid #DEBABA', color: '#7A3838' }}>
+                            {gcalSync.errorStatus === 401 || gcalSync.errorStatus === 403 ? (
+                              <>
+                                <div className="font-semibold">セッションが切れています</div>
+                                <div>自動再接続が失敗しました。下の「Google で接続」ボタンを押して再認証してください。</div>
+                              </>
+                            ) : gcalSync.errorStatus === 429 ? (
+                              <>
+                                <div className="font-semibold">API リクエスト制限</div>
+                                <div>しばらく待ってから再同期ボタンを押してくださいまし。</div>
+                              </>
+                            ) : gcalSync.errorStatus !== null && gcalSync.errorStatus >= 500 ? (
+                              <>
+                                <div className="font-semibold">Google 側のサーバエラー</div>
+                                <div>少し時間を置いて再同期してください ({gcalSync.errorStatus})</div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-semibold">同期エラー</div>
+                                <div>{gcalSync.errorMessage ?? 'ネットワーク接続をご確認くださいまし'}</div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        <div className="mt-1.5 text-[11px] text-muted-foreground/80 leading-relaxed">
+                          {selectedCalendarId === null
+                            ? '※ カレンダーを選択すると表示中月 ±1ヶ月の予定を取得します'
+                            : '選択カレンダーの表示中月 ±1ヶ月を取得しています'}
+                        </div>
+                      </div>
+
+                      {(() => {
+                        const hidden = Object.entries(gcalAssignments).filter(([, a]) => a.hidden === true);
+                        if (hidden.length === 0) return null;
+                        return (
+                          <div className="mt-3 pt-2.5 border-t border-border/60">
+                            <div className="text-xs font-semibold text-foreground/85 mb-1.5">
+                              非表示中のイベント ({hidden.length})
+                            </div>
+                            <div className="max-h-40 overflow-y-auto flex flex-col gap-1">
+                              {hidden.map(([key, a]) => (
+                                <div key={key} className="flex items-center gap-2 px-1.5 py-1 bg-card border border-border/40 rounded text-[11px]">
+                                  <span className="flex-1 text-foreground/85 truncate">
+                                    {a.summary ?? '(タイトル不明)'}
+                                  </span>
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => restoreGcalAssignment(key)}
+                                  >
+                                    再表示
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {(() => {
+                        const rules = Object.entries(gcalSummaryRules);
+                        if (rules.length === 0) return null;
+                        return (
+                          <div className="mt-3 pt-2.5 border-t border-border/60">
+                            <div className="text-xs font-semibold text-foreground/85 mb-1.5">
+                              同名予定ルール ({rules.length})
+                            </div>
+                            <div className="max-h-52 overflow-y-auto flex flex-col gap-1">
+                              {rules.map(([summary, r]) => {
+                                const proj = r.projectId !== undefined ? projectById.get(r.projectId) : undefined;
+                                return (
+                                  <div key={summary} className="flex items-center gap-2 px-1.5 py-1 bg-card border border-border/40 rounded text-[11px]">
+                                    <span className="flex-1 text-foreground/85 truncate">
+                                      {summary}
+                                    </span>
+                                    <span
+                                      className="text-[10px] px-1.5 py-px rounded whitespace-nowrap"
+                                      style={{
+                                        background: r.hidden === true ? '#F0E5D0' : (proj?.color ?? 'var(--muted)'),
+                                        color: r.hidden === true ? '#7A5530' : 'white',
+                                      }}
+                                    >
+                                      {r.hidden === true ? '非表示' : (proj?.name ?? '未割当')}
+                                    </span>
+                                    <Button
+                                      size="xs"
+                                      variant="outline"
+                                      onClick={() => setGcalSummaryRules((prev) => {
+                                        const { [summary]: _omit, ...rest } = prev;
+                                        return rest;
+                                      })}
+                                    >
+                                      削除
+                                    </Button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+        <DialogContent className="sm:max-w-xl max-h-[80vh] overflow-auto">
+          {(() => {
+            const ym = yearMonthOf(currentDate);
+            const aggregate = aggregateMonthly(mergedBlocksByDate, ym);
+            const elapsed = elapsedRatio(ym);
+            const totalAssignedMin = Array.from(aggregate.byProject.values()).reduce((a, b) => a + b, 0);
+            const grandTotalMin = totalAssignedMin + aggregate.unassigned;
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>{formatJaYearMonth(ym)}のサマリー</DialogTitle>
+                </DialogHeader>
+
+                {projects.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">案件が登録されておりません</div>
+                ) : (
+                  <div className="flex flex-col gap-3.5">
+                    {projects.map((p) => {
+                      const minutes = aggregate.byProject.get(p.id) ?? 0;
+                      const u = projectBudgetUsage(p, minutes, elapsed, ym);
+                      const effectivePM = effectiveBudgetPM(p, ym);
+                      const hasOverride = p.monthlyBudgetOverrides?.[ym] !== undefined;
+                      const isEditingThis = editingMonthBudgetProjectId === p.id;
+                      const barColor = u.status === 'over'
+                        ? '#B85C5C'
+                        : u.status === 'projectedOver'
+                          ? '#C58054'
+                          : (u.status === 'projectedUnder' || u.status === 'underConfirmed')
+                            ? '#C29050'
+                            : p.color;
+                      return (
+                        <div key={p.id}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span
+                              className="w-2.5 h-2.5 rounded-[2px] shrink-0"
+                              style={{ background: p.color }}
+                            />
+                            <span className="text-[13px] flex-1 text-foreground">{p.name}</span>
+                            <span className="text-xs text-foreground/85">
+                              {u.actualPM.toFixed(2)}人月 ({u.actualH.toFixed(1)}h)
+                              {effectivePM !== undefined && (
+                                <span className="text-muted-foreground">
+                                  {' / '}{effectivePM}人月 ({Math.round(u.ratio * 100)}%)
+                                  {hasOverride && (
+                                    <span className="ml-1 text-[10px] font-semibold text-primary">(今月のみ)</span>
+                                  )}
+                                </span>
+                              )}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => isEditingThis ? cancelEditMonthBudget() : beginEditMonthBudget(p.id, effectivePM)}
+                              title="今月の予算を変更"
+                              aria-label="今月の予算を変更"
+                              className={cn(isEditingThis && 'text-primary')}
+                            >
+                              <Pencil />
+                            </Button>
+                          </div>
+                          {isEditingThis && (
+                            <div className="flex gap-1.5 mb-2 pl-4 items-center flex-wrap">
+                              <Input
+                                type="number"
+                                step={0.05}
+                                min={0}
+                                value={editingMonthBudgetValue}
+                                onChange={(e) => setEditingMonthBudgetValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveMonthBudgetOverride(p.id, ym);
+                                  else if (e.key === 'Escape') cancelEditMonthBudget();
+                                }}
+                                autoFocus
+                                placeholder="人月"
+                                className="w-20 h-7 text-xs"
+                              />
+                              <Button
+                                size="xs"
+                                onClick={() => saveMonthBudgetOverride(p.id, ym)}
+                                disabled={editingMonthBudgetValue.trim() === ''}
+                              >
+                                保存
+                              </Button>
+                              {hasOverride && (
+                                <Button
+                                  size="xs"
+                                  variant="destructive"
+                                  onClick={() => clearMonthBudgetOverride(p.id, ym)}
+                                  title="今月のオーバーライドを解除して通常の予算に戻す"
+                                >
+                                  解除
+                                </Button>
+                              )}
+                              <Button size="xs" variant="outline" onClick={cancelEditMonthBudget}>
+                                キャンセル
+                              </Button>
+                            </div>
+                          )}
+                          {u.budgetH !== null && (
+                            <div className="h-1.5 bg-muted rounded-[3px] overflow-hidden">
+                              <div
+                                className="h-full transition-[width] duration-200"
+                                style={{ width: `${u.barFraction * 100}%`, background: barColor }}
+                              />
+                            </div>
+                          )}
+                          {u.budgetH !== null && u.lowH !== null && u.highH !== null && (
+                            <div className="text-[11px] text-muted-foreground mt-1">
+                              許容 {fmtH(u.lowH)}h–{fmtH(u.highH)}h（±{fmtH(u.toleranceH)}h）
+                            </div>
+                          )}
+                          {u.status === 'over' && u.highH !== null && (
+                            <div className="text-[11px] mt-0.5" style={{ color: '#B85C5C' }}>
+                              ⚠ 超過 ({(u.actualH - u.highH).toFixed(1)}h オーバー)
+                            </div>
+                          )}
+                          {u.status === 'underConfirmed' && u.lowH !== null && (
+                            <div className="text-[11px] mt-0.5" style={{ color: '#8E6230' }}>
+                              ⚠ 不足 ({(u.lowH - u.actualH).toFixed(1)}h 不足、月末確定)
+                            </div>
+                          )}
+                          {u.status === 'projectedOver' && u.projection !== null && (
+                            <div className="text-[11px] mt-0.5" style={{ color: '#A0623A' }}>
+                              ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容を超過する見込み）
+                            </div>
+                          )}
+                          {u.status === 'projectedUnder' && u.projection !== null && (
+                            <div className="text-[11px] mt-0.5" style={{ color: '#8E6230' }}>
+                              ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容に届かない見込み）
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
+                )}
+
+                <div className="border-t border-border/60 mt-4 pt-3 text-xs text-foreground/85">
+                  <div>合計実績: {(grandTotalMin / 60).toFixed(1)}h（割当: {(totalAssignedMin / 60).toFixed(1)}h, 未割当: {(aggregate.unassigned / 60).toFixed(1)}h）</div>
+                  <div className="text-muted-foreground mt-1">
+                    月の経過: {Math.round(elapsed * 100)}%
+                  </div>
+                </div>
                 </>
               );
             })()}
-          </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
-      {blockEdit !== null && (
-        <div
-          onClick={closeBlockEdit}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'white',
-              borderRadius: '8px',
-              padding: '20px',
-              minWidth: '380px',
-              maxWidth: '90vw',
-              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '15px' }}>
+      <Dialog
+        open={blockEdit !== null}
+        onOpenChange={(open) => { if (!open) closeBlockEdit(); }}
+      >
+        {blockEdit !== null && (
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
                 {blockEdit.source === 'gcal' ? '📅 Google Calendar の予定' : 'ブロック編集'}
-              </h2>
-              <button
-                onClick={closeBlockEdit}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
-                aria-label="閉じる"
-              >×</button>
-            </div>
+              </DialogTitle>
+            </DialogHeader>
 
             {blockEdit.source === 'gcal' && (() => {
               const existingRule = gcalSummaryRules[blockEdit.label];
               const hasIndividual = blockEdit.gcalKey !== undefined && gcalAssignments[blockEdit.gcalKey] !== undefined;
               return (
-                <div style={{ marginBottom: 12, padding: '8px 10px', background: '#f3f4f6', borderRadius: 4, fontSize: 11, color: '#4b5563', lineHeight: 1.5 }}>
+                <div className="bg-muted rounded-md px-2.5 py-2 text-[11px] text-muted-foreground leading-relaxed">
                   時間とラベルは GCal 側で管理されています。ここでは案件割当のみ可能です。
                   {blockEdit.gcalRecurring === true && (
-                    <div style={{ marginTop: 4, color: '#1d4ed8' }}>
+                    <div className="mt-1" style={{ color: '#5C7BA6' }}>
                       🔁 繰り返し予定です — 案件割当・非表示はシリーズ全体に適用されます
                     </div>
                   )}
                   {existingRule !== undefined && !hasIndividual && (
-                    <div style={{ marginTop: 4, color: '#7c3aed' }}>
+                    <div className="mt-1" style={{ color: '#8B7AB3' }}>
                       📌 同名予定ルール適用中: {existingRule.hidden === true ? '非表示' : (existingRule.projectId !== undefined ? (projectById.get(existingRule.projectId)?.name ?? '不明案件') : '未割当')}
                     </div>
                   )}
                   {existingRule !== undefined && hasIndividual && (
-                    <div style={{ marginTop: 4, color: '#d97706' }}>
+                    <div className="mt-1" style={{ color: '#8E6230' }}>
                       ⚠ 同名ルールはあるが、この予定は個別設定で上書きされています
                     </div>
                   )}
@@ -1663,129 +1541,124 @@ export function App() {
               );
             })()}
 
-            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>ラベル</label>
-            <input
-              autoFocus={blockEdit.source !== 'gcal'}
-              disabled={blockEdit.source === 'gcal'}
-              value={blockEdit.label}
-              onChange={(e) => setBlockEdit({ ...blockEdit, label: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveBlockEdit();
-                else if (e.key === 'Escape') closeBlockEdit();
-              }}
-              onFocus={(e) => e.currentTarget.select()}
-              placeholder="ラベル"
-              style={{
-                width: '100%',
-                padding: '6px 8px',
-                fontSize: '13px',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                boxSizing: 'border-box',
-                outline: 'none',
-                marginBottom: '12px',
-                background: blockEdit.source === 'gcal' ? '#f9fafb' : 'white',
-                color: blockEdit.source === 'gcal' ? '#6b7280' : '#1f2937',
-              }}
-            />
+            <div className="grid gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="be-label" className="text-[11px] text-muted-foreground">ラベル</Label>
+                <Input
+                  id="be-label"
+                  autoFocus={blockEdit.source !== 'gcal'}
+                  disabled={blockEdit.source === 'gcal'}
+                  value={blockEdit.label}
+                  onChange={(e) => setBlockEdit({ ...blockEdit, label: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveBlockEdit();
+                    else if (e.key === 'Escape') closeBlockEdit();
+                  }}
+                  onFocus={(e) => e.currentTarget.select()}
+                  placeholder="ラベル"
+                />
+              </div>
 
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>開始</label>
-                <input
-                  type="time"
-                  disabled={blockEdit.source === 'gcal'}
-                  value={blockEdit.startHHMM}
-                  onChange={(e) => setBlockEdit({ ...blockEdit, startHHMM: e.target.value })}
-                  step="900"
-                  style={{
-                    width: '100%', padding: '6px 8px', fontSize: '13px',
-                    border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none',
-                    background: blockEdit.source === 'gcal' ? '#f9fafb' : 'white',
-                    color: blockEdit.source === 'gcal' ? '#6b7280' : '#1f2937',
-                  }}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="be-start" className="text-[11px] text-muted-foreground">開始</Label>
+                  <Input
+                    id="be-start"
+                    type="time"
+                    disabled={blockEdit.source === 'gcal'}
+                    value={blockEdit.startHHMM}
+                    onChange={(e) => setBlockEdit({ ...blockEdit, startHHMM: e.target.value })}
+                    step={900}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="be-dur" className="text-[11px] text-muted-foreground">時間 (分)</Label>
+                  <Input
+                    id="be-dur"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    step={5}
+                    disabled={blockEdit.source === 'gcal'}
+                    value={blockEdit.durationMin}
+                    onChange={(e) => setBlockEdit({ ...blockEdit, durationMin: e.target.value })}
+                  />
+                </div>
               </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>時間 (分)</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="1440"
-                  step="5"
-                  disabled={blockEdit.source === 'gcal'}
-                  value={blockEdit.durationMin}
-                  onChange={(e) => setBlockEdit({ ...blockEdit, durationMin: e.target.value })}
-                  style={{
-                    width: '100%', padding: '6px 8px', fontSize: '13px',
-                    border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none',
-                    background: blockEdit.source === 'gcal' ? '#f9fafb' : 'white',
-                    color: blockEdit.source === 'gcal' ? '#6b7280' : '#1f2937',
-                  }}
-                />
+
+              <div className="space-y-1.5">
+                <Label htmlFor="be-project" className="text-[11px] text-muted-foreground">案件</Label>
+                <Select
+                  value={blockEdit.projectId === '' ? '__unassigned__' : blockEdit.projectId}
+                  onValueChange={(v) => setBlockEdit({ ...blockEdit, projectId: v === '__unassigned__' ? '' : v })}
+                >
+                  <SelectTrigger id="be-project" className="w-full" autoFocus={blockEdit.source === 'gcal'}>
+                    <SelectValue placeholder="案件を選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__unassigned__">— 未割当 —</SelectItem>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        <span className="inline-flex items-center gap-2">
+                          <span
+                            className="w-2.5 h-2.5 rounded-[3px] inline-block"
+                            style={{ background: p.color }}
+                          />
+                          {p.name}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+
+              {blockEdit.source === 'gcal' && (
+                <label className="flex items-start gap-2 text-[12px] text-foreground/85 cursor-pointer leading-relaxed">
+                  <Checkbox
+                    checked={editApplyToAllSameSummary}
+                    onCheckedChange={(v) => setEditApplyToAllSameSummary(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span>同名予定すべてに同じ <strong>案件</strong> を適用 ({blockEdit.label.length > 22 ? `${blockEdit.label.slice(0, 22)}…` : blockEdit.label})</span>
+                </label>
+              )}
             </div>
 
-            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>案件</label>
-            <select
-              autoFocus={blockEdit.source === 'gcal'}
-              value={blockEdit.projectId}
-              onChange={(e) => setBlockEdit({ ...blockEdit, projectId: e.target.value })}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none', background: 'white', color: '#1f2937', marginBottom: blockEdit.source === 'gcal' ? '8px' : '16px' }}
-            >
-              <option value="">— 未割当 —</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-
-            {blockEdit.source === 'gcal' && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={editApplyToAllSameSummary}
-                  onChange={(e) => setEditApplyToAllSameSummary(e.currentTarget.checked)}
-                />
-                <span>同名予定すべてに同じ <strong>案件</strong> を適用 ({blockEdit.label.length > 22 ? `${blockEdit.label.slice(0, 22)}…` : blockEdit.label})</span>
-              </label>
-            )}
-
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'center' }}>
+            <DialogFooter className="!flex-row !justify-between sm:!justify-between gap-2">
               {blockEdit.source === 'gcal' ? (
-                <button
+                <Button
+                  variant="outline"
                   onClick={hideGcalFromEdit}
                   title="この予定だけ taskette 上で非表示にします (GCal 側は変更されません)"
-                  style={{ background: '#fef3c7', color: '#92400e', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
-                >この予定のみ非表示</button>
+                  style={{ background: '#F0E5D0', color: '#7A5530', borderColor: '#E0CFA8' }}
+                >
+                  この予定のみ非表示
+                </Button>
               ) : (
-                <button
-                  onClick={deleteBlockFromEdit}
-                  style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
-                >削除</button>
+                <Button variant="destructive" onClick={deleteBlockFromEdit}>
+                  削除
+                </Button>
               )}
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={closeBlockEdit}
-                  style={{ background: 'white', color: '#6b7280', border: '1px solid #d1d5db', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
-                >キャンセル</button>
-                <button
-                  onClick={saveBlockEdit}
-                  style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
-                >保存</button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={closeBlockEdit}>キャンセル</Button>
+                <Button onClick={saveBlockEdit}>保存</Button>
               </div>
-            </div>
+            </DialogFooter>
 
             {blockEdit.source === 'gcal' && (
-              <div style={{ marginTop: 12, paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right' }}>
+              <div className="pt-2 border-t border-border/60 text-right">
                 <button
+                  type="button"
                   onClick={hideGcalSeriesFromEdit}
-                  style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: 11, cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
-                >同名予定すべてを非表示にする…</button>
+                  className="text-[11px] text-muted-foreground/80 hover:text-foreground underline cursor-pointer"
+                >
+                  同名予定すべてを非表示にする…
+                </button>
               </div>
             )}
-          </div>
-        </div>
-      )}
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   );
 }
