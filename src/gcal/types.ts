@@ -63,6 +63,7 @@ export type GcalNormalizedEvent = {
   readonly key: string; // "calendarId|eventId" 形式の一意キー (デバッグ・参照用)
   readonly assignmentKey: string; // assignments の lookup キー: 単発は eventId、繰り返しは parent recurringEventId
   readonly isRecurring: boolean;
+  readonly recurringEventId: string | undefined; // 繰り返しの親 ID。永続化からの復元時に assignmentKey を再生成するために保持
   readonly summary: string;
   readonly startMs: number;
   readonly endMs: number;

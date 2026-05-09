@@ -19,6 +19,7 @@ const makeLocalEvent = (
     key: `${calendarId}|${key}`,
     assignmentKey,
     isRecurring,
+    recurringEventId,
     summary,
     startMs: new Date(startLocal[0], startLocal[1] - 1, startLocal[2], startLocal[3], startLocal[4], 0, 0).getTime(),
     endMs: new Date(endLocal[0], endLocal[1] - 1, endLocal[2], endLocal[3], endLocal[4], 0, 0).getTime(),

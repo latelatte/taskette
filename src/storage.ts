@@ -198,10 +198,33 @@ const stripGcalBlocks = (state: StoredState): StoredState => {
   return { ...state, blocksByDate: filteredBlocks };
 };
 
+export type GcalEventRecord = {
+  readonly calendarId: string;
+  readonly eventId: string;
+  readonly summary: string;
+  readonly startMs: number;
+  readonly endMs: number;
+  readonly isRecurring: boolean;
+  readonly recurringEventId: string | null;
+  readonly htmlLink: string | null;
+};
+
+export type GcalSyncRunInput = {
+  readonly calendarId: string;
+  readonly syncRunId: string;
+  readonly runStartedAt: number;
+  readonly timeMinMs: number;
+  readonly timeMaxMs: number;
+  readonly events: readonly GcalEventRecord[];
+};
+
 interface StorageBackend {
   load(): Promise<StoredState>;
   save(next: StoredState): Promise<void>;
   importStoredJson(raw: string): Promise<StoredState>;
+  loadGcalEvents(calendarId: string): Promise<readonly GcalEventRecord[]>;
+  applyGcalSyncRun(args: GcalSyncRunInput): Promise<void>;
+  clearGcalEvents(calendarId: string): Promise<void>;
 }
 
 class LocalStorageBackend implements StorageBackend {
@@ -235,6 +258,16 @@ class LocalStorageBackend implements StorageBackend {
     if (state === null) throw new Error('Invalid taskette JSON payload');
     await this.save(state);
     return state;
+  }
+
+  loadGcalEvents(_calendarId: string): Promise<readonly GcalEventRecord[]> {
+    return Promise.resolve([]);
+  }
+  applyGcalSyncRun(_args: GcalSyncRunInput): Promise<void> {
+    return Promise.resolve();
+  }
+  clearGcalEvents(_calendarId: string): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -630,6 +663,68 @@ class SqliteBackend implements StorageBackend {
     await this.save(state);
     return state;
   }
+
+  async loadGcalEvents(calendarId: string): Promise<readonly GcalEventRecord[]> {
+    const db = await this.getDb();
+    const rows = await db.select<{
+      calendar_id: string;
+      event_id: string;
+      summary: string;
+      start_ms: number;
+      end_ms: number;
+      is_recurring: number;
+      recurring_event_id: string | null;
+      html_link: string | null;
+    }[]>(
+      'SELECT calendar_id, event_id, summary, start_ms, end_ms, is_recurring, recurring_event_id, html_link FROM gcal_events WHERE calendar_id = ? AND tombstone = 0',
+      [calendarId],
+    );
+    return rows.map((r) => ({
+      calendarId: r.calendar_id,
+      eventId: r.event_id,
+      summary: r.summary,
+      startMs: r.start_ms,
+      endMs: r.end_ms,
+      isRecurring: r.is_recurring === 1,
+      recurringEventId: r.recurring_event_id,
+      htmlLink: r.html_link,
+    }));
+  }
+
+  async applyGcalSyncRun(args: GcalSyncRunInput): Promise<void> {
+    const db = await this.getDb();
+    const now = Date.now();
+    // UPSERT each event; revives tombstoned rows by clearing tombstone and bumping revision.
+    for (const e of args.events) {
+      await db.execute(
+        'INSERT INTO gcal_events (calendar_id, event_id, summary, start_ms, end_ms, is_recurring, recurring_event_id, html_link, last_seen_at, sync_run_id, tombstone, revision, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?) ON CONFLICT(calendar_id, event_id) DO UPDATE SET summary = excluded.summary, start_ms = excluded.start_ms, end_ms = excluded.end_ms, is_recurring = excluded.is_recurring, recurring_event_id = excluded.recurring_event_id, html_link = excluded.html_link, last_seen_at = excluded.last_seen_at, sync_run_id = excluded.sync_run_id, tombstone = 0, revision = gcal_events.revision + 1, updated_at = excluded.updated_at',
+        [
+          e.calendarId,
+          e.eventId,
+          e.summary,
+          e.startMs,
+          e.endMs,
+          e.isRecurring ? 1 : 0,
+          e.recurringEventId,
+          e.htmlLink,
+          args.runStartedAt,
+          args.syncRunId,
+          now,
+        ],
+      );
+    }
+    // Tombstone window-intersecting active rows that were NOT seen in this run.
+    // Window intersection: start_ms < timeMax AND end_ms > timeMin.
+    await db.execute(
+      'UPDATE gcal_events SET tombstone = 1, revision = revision + 1, updated_at = ? WHERE calendar_id = ? AND tombstone = 0 AND last_seen_at < ? AND start_ms < ? AND end_ms > ?',
+      [now, args.calendarId, args.runStartedAt, args.timeMaxMs, args.timeMinMs],
+    );
+  }
+
+  async clearGcalEvents(calendarId: string): Promise<void> {
+    const db = await this.getDb();
+    await db.execute('DELETE FROM gcal_events WHERE calendar_id = ?', [calendarId]);
+  }
 }
 
 const isTauri = (): boolean =>
@@ -649,5 +744,14 @@ export const saveStore = (state: StoredState): Promise<void> => getBackend().sav
 
 export const importStoreFromJson = (raw: string): Promise<StoredState> =>
   getBackend().importStoredJson(raw);
+
+export const loadGcalEventsFromStore = (calendarId: string): Promise<readonly GcalEventRecord[]> =>
+  getBackend().loadGcalEvents(calendarId);
+
+export const applyGcalSyncRunToStore = (args: GcalSyncRunInput): Promise<void> =>
+  getBackend().applyGcalSyncRun(args);
+
+export const clearGcalEventsFromStore = (calendarId: string): Promise<void> =>
+  getBackend().clearGcalEvents(calendarId);
 
 export const isUsingTauriBackend = (): boolean => isTauri();

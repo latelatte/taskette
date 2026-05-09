@@ -66,6 +66,7 @@ export const normalizeEvent = (e: GcalApiEvent, calendarId: string): GcalNormali
     key: `${calendarId}|${e.id}`,
     assignmentKey,
     isRecurring,
+    recurringEventId: isRecurring ? e.recurringEventId : undefined,
     summary: e.summary !== undefined && e.summary.length > 0 ? e.summary : '(タイトルなし)',
     startMs,
     endMs,
