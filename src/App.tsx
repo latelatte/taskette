@@ -49,6 +49,7 @@ export function App() {
   const [newProjectColor, setNewProjectColor] = useState<string>(
     PROJECT_COLOR_PALETTE[0] ?? '#64748b',
   );
+  const [colorPickerProjectId, setColorPickerProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     saveStore({ blocksByDate, projects });
@@ -139,6 +140,16 @@ export function App() {
         return { ...p, monthlyBudget: num };
       }),
     );
+  };
+
+  const renameProject = (id: string, name: string): void => {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return;
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name: trimmed } : p)));
+  };
+
+  const recolorProject = (id: string, color: string): void => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
   };
 
   const handleDeleteProject = (id: string): void => {
@@ -356,7 +367,7 @@ export function App() {
 
       {showSettings && (
         <div
-          onClick={() => setShowSettings(false)}
+          onClick={() => { setShowSettings(false); setColorPickerProjectId(null); }}
           style={{
             position: 'fixed',
             inset: 0,
@@ -383,7 +394,7 @@ export function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h2 style={{ margin: 0, fontSize: '15px' }}>案件設定</h2>
               <button
-                onClick={() => setShowSettings(false)}
+                onClick={() => { setShowSettings(false); setColorPickerProjectId(null); }}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
                 aria-label="閉じる"
               >×</button>
@@ -393,26 +404,74 @@ export function App() {
               {projects.length === 0 ? (
                 <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>案件が登録されておりません</div>
               ) : (
-                projects.map((p) => (
-                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
-                    <span style={{ width: 14, height: 14, borderRadius: 3, background: p.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: '13px' }}>{p.name}</span>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="0"
-                      value={p.monthlyBudget ?? ''}
-                      onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
-                      placeholder="人月"
-                      title="月予算 (人月)"
-                      style={{ width: 70, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
-                    />
-                    <button
-                      onClick={() => handleDeleteProject(p.id)}
-                      style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
-                    >削除</button>
-                  </div>
-                ))
+                projects.map((p) => {
+                  const pickerOpen = colorPickerProjectId === p.id;
+                  return (
+                    <div key={p.id} style={{ padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <button
+                          onClick={() => setColorPickerProjectId(pickerOpen ? null : p.id)}
+                          title="色を変更"
+                          aria-label="色を変更"
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: 4,
+                            background: p.color,
+                            border: pickerOpen ? '2px solid #1f2937' : '1px solid rgba(0,0,0,0.1)',
+                            flexShrink: 0,
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        />
+                        <input
+                          value={p.name}
+                          onChange={(e) => renameProject(p.id, e.currentTarget.value)}
+                          placeholder="案件名"
+                          style={{ flex: 1, fontSize: '13px', padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: '4px', outline: 'none', background: 'white' }}
+                        />
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          value={p.monthlyBudget ?? ''}
+                          onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
+                          placeholder="人月"
+                          title="月予算 (人月)"
+                          style={{ width: 70, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
+                        />
+                        <button
+                          onClick={() => handleDeleteProject(p.id)}
+                          style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
+                        >削除</button>
+                      </div>
+                      {pickerOpen && (
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', paddingLeft: '28px', flexWrap: 'wrap' }}>
+                          {PROJECT_COLOR_PALETTE.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                recolorProject(p.id, c);
+                                setColorPickerProjectId(null);
+                              }}
+                              title={c}
+                              style={{
+                                width: 22,
+                                height: 22,
+                                borderRadius: 4,
+                                background: c,
+                                border: p.color === c ? '2px solid #1f2937' : '2px solid transparent',
+                                cursor: 'pointer',
+                                padding: 0,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
 
