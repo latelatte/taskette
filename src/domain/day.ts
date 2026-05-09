@@ -76,4 +76,27 @@ export class Day {
     this._blocks[i] = moved;
     return { ok: true };
   }
+
+  resize(id: string, newDuration: number): PlaceResult {
+    const i = this._blocks.findIndex((b) => b.id === id);
+    if (i === -1) {
+      return { ok: false, reason: 'invalid', message: `block not found: ${id}` };
+    }
+    if (newDuration <= 0) {
+      return { ok: false, reason: 'invalid', message: 'durationMin must be positive' };
+    }
+    const target = this._blocks[i]!;
+    const resized: TimeBlock = { ...target, durationMin: newDuration };
+    if (!fitsWithinDay(resized)) {
+      return { ok: false, reason: 'invalid', message: 'block does not fit within the day' };
+    }
+    for (const existing of this._blocks) {
+      if (existing.id === id) continue;
+      if (overlaps(existing, resized)) {
+        return { ok: false, reason: 'overlap', conflictingBlockId: existing.id };
+      }
+    }
+    this._blocks[i] = resized;
+    return { ok: true };
+  }
 }

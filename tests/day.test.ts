@@ -114,6 +114,48 @@ describe('Day.move', () => {
   });
 });
 
+describe('Day.resize', () => {
+  it('shrinks a block', () => {
+    const day = new Day('2026-05-09');
+    day.place(block({ id: 'a', start: 540, durationMin: 60 }));
+    expect(day.resize('a', 30)).toEqual({ ok: true });
+    expect(day.blocks[0]?.durationMin).toBe(30);
+  });
+
+  it('grows a block into a free area', () => {
+    const day = new Day('2026-05-09');
+    day.place(block({ id: 'a', start: 540, durationMin: 60 }));
+    expect(day.resize('a', 120)).toEqual({ ok: true });
+    expect(day.blocks[0]?.durationMin).toBe(120);
+  });
+
+  it('rejects a resize that overlaps the next block', () => {
+    const day = new Day('2026-05-09');
+    day.place(block({ id: 'a', start: 540, durationMin: 60 }));
+    day.place(block({ id: 'b', start: 660, durationMin: 30 }));
+    const result = day.resize('a', 180);
+    expect(result).toEqual({ ok: false, reason: 'overlap', conflictingBlockId: 'b' });
+  });
+
+  it('rejects a non-positive duration', () => {
+    const day = new Day('2026-05-09');
+    day.place(block({ id: 'a', start: 540, durationMin: 60 }));
+    expect(day.resize('a', 0)).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(day.resize('a', -5)).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+
+  it('rejects a resize that exceeds end of day', () => {
+    const day = new Day('2026-05-09');
+    day.place(block({ id: 'a', start: 1400, durationMin: 30 }));
+    expect(day.resize('a', 60)).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+
+  it('returns invalid when resizing a non-existent block', () => {
+    const day = new Day('2026-05-09');
+    expect(day.resize('ghost', 30)).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+});
+
 describe('Day constructor with initial blocks', () => {
   it('accepts non-overlapping initial blocks', () => {
     const day = new Day('2026-05-09', [

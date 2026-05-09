@@ -1541,7 +1541,17 @@ export function App() {
               );
             })()}
 
-            <div className="grid gap-4">
+            <div
+              className="grid gap-4"
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+                const target = e.target as HTMLElement;
+                // Select の Trigger 上では Enter で開閉させたいので拾わない
+                if (target.getAttribute('role') === 'combobox') return;
+                e.preventDefault();
+                saveBlockEdit();
+              }}
+            >
               <div className="space-y-1.5">
                 <Label htmlFor="be-label" className="text-[11px] text-muted-foreground">ラベル</Label>
                 <Input
@@ -1550,10 +1560,6 @@ export function App() {
                   disabled={blockEdit.source === 'gcal'}
                   value={blockEdit.label}
                   onChange={(e) => setBlockEdit({ ...blockEdit, label: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveBlockEdit();
-                    else if (e.key === 'Escape') closeBlockEdit();
-                  }}
                   onFocus={(e) => e.currentTarget.select()}
                   placeholder="ラベル"
                 />

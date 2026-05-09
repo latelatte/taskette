@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMo
 import { Calendar as CalendarIcon } from 'lucide-react';
 import { Day } from '../domain/day.js';
 import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from '../domain/types.js';
+import { today } from '../dates.js';
 import { cn } from '../lib/utils.js';
 import { DailyActualStrip } from './DailyActualStrip.js';
 
@@ -12,6 +13,7 @@ const DEFAULT_LABEL = '新規ブロック';
 const FALLBACK_BLOCK_COLOR = '#A39A92';
 const MIN_DRAG_DURATION = 15;
 const TIME_GUTTER_PX = 56;
+const INITIAL_SCROLL_HOUR = 8; // 仕事時間 (9-18) の少し手前にスクロール開始
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
@@ -21,6 +23,14 @@ const snapMinutes = (mins: number): MinuteOfDay =>
 type DragCreateState = {
   readonly startMin: MinuteOfDay;
   readonly currentMin: MinuteOfDay;
+};
+
+type ResizeState = {
+  readonly id: string;
+  readonly start: MinuteOfDay;
+  readonly originalDuration: number;
+  readonly currentDuration: number;
+  readonly overlaps: boolean;
 };
 
 type DayViewProps = {
@@ -45,6 +55,38 @@ export function DayView(props: DayViewProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [dragCreate, setDragCreate] = useState<DragCreateState | null>(null);
+  const [resize, setResize] = useState<ResizeState | null>(null);
+  const [nowMin, setNowMin] = useState<MinuteOfDay>(() => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  });
+  const isToday = currentDate === today();
+
+  // 初期スクロール位置: 通常は 8 時、今日なら現時刻の 1 時間前を表示
+  useEffect(() => {
+    const sc = scrollContainerRef.current;
+    if (sc === null) return;
+    let scrollMin = INITIAL_SCROLL_HOUR * 60;
+    if (currentDate === today()) {
+      const d = new Date();
+      const cur = d.getHours() * 60 + d.getMinutes();
+      if (cur > scrollMin + 60) {
+        scrollMin = cur - 60;
+      }
+    }
+    sc.scrollTop = scrollMin * PX_PER_MIN;
+  }, [currentDate]);
+
+  // 現時刻を毎分更新
+  useEffect(() => {
+    if (!isToday) return;
+    const tick = (): void => {
+      const d = new Date();
+      setNowMin(d.getHours() * 60 + d.getMinutes());
+    };
+    const id = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(id);
+  }, [isToday]);
 
   const blockColor = (b: TimeBlock): string => {
     if (b.projectId !== undefined) {
@@ -87,6 +129,22 @@ export function DayView(props: DayViewProps) {
     } else {
       setError(result.message);
     }
+  };
+
+  const applyResize = (id: string, newDuration: number): boolean => {
+    const day = new Day(currentDate, blocks);
+    const result = day.resize(id, newDuration);
+    if (result.ok) {
+      setBlocks(day.blocks);
+      setError(null);
+      return true;
+    }
+    if (result.reason === 'overlap') {
+      setError('伸ばせませんでしたわ — 他のブロックと衝突します');
+    } else {
+      setError(result.message);
+    }
+    return false;
   };
 
   const handleBlockDragStart = (e: DragEvent<HTMLDivElement>, block: TimeBlock): void => {
@@ -165,12 +223,71 @@ export function DayView(props: DayViewProps) {
   // refs to access latest applyPlace/openBlockEdit/blocks without re-running drag effect
   const applyPlaceRef = useRef(applyPlace);
   applyPlaceRef.current = applyPlace;
+  const applyResizeRef = useRef(applyResize);
+  applyResizeRef.current = applyResize;
   const openBlockEditRef = useRef(openBlockEdit);
   openBlockEditRef.current = openBlockEdit;
   const dragCreateRef = useRef(dragCreate);
   dragCreateRef.current = dragCreate;
+  const resizeRef = useRef(resize);
+  resizeRef.current = resize;
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
 
   const isDragging = dragCreate !== null;
+  const isResizing = resize !== null;
+
+  const handleResizeMouseDown = (
+    e: ReactMouseEvent<HTMLDivElement>,
+    block: TimeBlock,
+  ): void => {
+    if (block.source === 'gcal') return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setResize({
+      id: block.id,
+      start: block.start,
+      originalDuration: block.durationMin,
+      currentDuration: block.durationMin,
+      overlaps: false,
+    });
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const onMove = (e: MouseEvent): void => {
+      const cur = resizeRef.current;
+      if (cur === null) return;
+      const endMin = snapMinutes(yToMinute(e.clientY));
+      const rawDuration = endMin - cur.start;
+      const others = blocksRef.current.filter((b) => b.id !== cur.id);
+      const wallMin = others
+        .filter((blk) => blk.start >= cur.start)
+        .reduce((acc, blk) => Math.min(acc, blk.start), 1440);
+      const maxDuration = wallMin - cur.start;
+      const clamped = Math.max(MIN_DRAG_DURATION, Math.min(maxDuration, rawDuration));
+      setResize((prev) => (prev === null ? null : { ...prev, currentDuration: clamped, overlaps: false }));
+    };
+    const onUp = (): void => {
+      const cur = resizeRef.current;
+      setResize(null);
+      if (cur === null) return;
+      if (cur.currentDuration === cur.originalDuration) return;
+      applyResizeRef.current(cur.id, cur.currentDuration);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setResize(null);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isResizing]);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -230,7 +347,7 @@ export function DayView(props: DayViewProps) {
         onDrop={handleDrop}
         className={cn(
           'flex-1 overflow-auto relative bg-background',
-          isDragging ? 'select-none' : 'select-auto',
+          isDragging || isResizing ? 'select-none' : 'select-auto',
         )}
       >
         <div
@@ -288,60 +405,116 @@ export function DayView(props: DayViewProps) {
           {/* Blocks */}
           {blocks.map((b) => {
             const color = blockColor(b);
-            const proj = b.projectId !== undefined ? projectById.get(b.projectId) : undefined;
             const isGcal = b.source === 'gcal';
+            const isResizingThis = resize !== null && resize.id === b.id;
+            const effectiveDuration = isResizingThis ? resize.currentDuration : b.durationMin;
+            const topPx = b.start * PX_PER_MIN;
+            const heightPx = effectiveDuration * PX_PER_MIN;
+            const timeLabel = `${formatMinute(b.start)} – ${formatMinute(b.start + effectiveDuration)}`;
             return (
               <div
                 key={b.id}
-                draggable={!isGcal}
+                draggable={!isGcal && !isResizingThis}
                 onDragStart={(e) => handleBlockDragStart(e, b)}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   openBlockEdit(b);
                 }}
                 onMouseDown={(e) => { if (isGcal) e.stopPropagation(); }}
-                title={isGcal ? `${b.label}\n(Google Calendar の予定 — ダブルクリックで案件割当)` : 'ダブルクリックで編集'}
+                title={isGcal ? `${b.label}\n(Google Calendar の予定 — ダブルクリックで案件割当)` : 'ダブルクリックで編集 / 下端ドラッグでリサイズ'}
                 className={cn(
-                  'absolute rounded-lg overflow-hidden transition-shadow text-xs px-2 py-1',
-                  isGcal
-                    ? 'cursor-default text-foreground'
-                    : 'cursor-grab text-white hover:shadow-md',
+                  'absolute rounded-lg overflow-hidden text-foreground transition-[box-shadow,transform] duration-150 shadow-soft',
+                  isGcal ? 'cursor-default' : 'cursor-grab hover:shadow-floaty hover:-translate-y-px',
+                  isResizingThis && 'shadow-floaty',
                 )}
                 style={{
-                  top: `${b.start * PX_PER_MIN}px`,
+                  top: `${topPx}px`,
                   left: '8px',
                   right: '16px',
-                  height: `${b.durationMin * PX_PER_MIN}px`,
-                  background: isGcal ? `${color}22` : color,
-                  border: isGcal ? `1.5px dashed ${color}99` : undefined,
-                  borderLeft: isGcal ? `4px solid ${color}` : undefined,
-                  boxShadow: isGcal ? undefined : 'var(--shadow-soft)',
+                  height: `${heightPx}px`,
+                  background: isGcal ? `${color}14` : `${color}26`,
+                  border: isGcal ? `1.5px dashed ${color}80` : `1px solid ${color}40`,
+                  borderLeft: `4px solid ${color}`,
                 }}
               >
-                <div className="flex items-center gap-1.5 truncate leading-tight">
-                  {isGcal && (
-                    <CalendarIcon
-                      className="size-2.5 shrink-0"
-                      style={{ color }}
-                    />
+                <div
+                  className={cn(
+                    'h-full w-full flex flex-col min-w-0 px-2.5',
+                    // 短いブロックは中央寄せで詰める / それ以外は上寄せで「ちょうどいい位置」に
+                    effectiveDuration < 22 ? 'py-0 justify-center' : 'pt-1',
                   )}
-                  <span className="truncate font-medium">{b.label}</span>
-                </div>
-                {b.durationMin >= 25 && (
-                  <div
-                    className={cn(
-                      'text-[10px] mt-0.5 truncate',
-                      isGcal ? 'text-foreground/65' : 'opacity-85',
+                >
+                  <div className="flex items-center gap-1.5 leading-tight min-w-0">
+                    {isGcal && (
+                      <CalendarIcon className="size-3 shrink-0" style={{ color }} />
                     )}
+                    <span className="truncate font-medium text-[12.5px] flex-1 min-w-0">
+                      {b.label}
+                    </span>
+                    <span className="shrink-0 text-[10.5px] tabular-nums text-foreground/60 font-normal">
+                      {timeLabel}
+                    </span>
+                  </div>
+                </div>
+
+                {!isGcal && (
+                  <div
+                    onMouseDown={(e) => handleResizeMouseDown(e, b)}
+                    className={cn(
+                      'absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize group',
+                      'hover:bg-foreground/10',
+                      isResizingThis && 'bg-foreground/15',
+                    )}
+                    title="ドラッグで時間を伸縮"
                   >
-                    {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
-                    {proj !== undefined && <span> · {proj.name}</span>}
-                    {isGcal && proj === undefined && <span> · GCal</span>}
+                    <div
+                      className="absolute left-1/2 -translate-x-1/2 bottom-0.5 w-6 h-px opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ background: `${color}99` }}
+                    />
                   </div>
                 )}
               </div>
             );
           })}
+
+          {/* Now line (今日のみ) */}
+          {isToday && (
+            <div
+              className="absolute right-0 pointer-events-none z-20"
+              style={{
+                top: `${nowMin * PX_PER_MIN}px`,
+                left: `-${TIME_GUTTER_PX}px`,
+              }}
+            >
+              <div
+                className="absolute inset-x-0"
+                style={{
+                  top: 0,
+                  borderTop: '1.5px solid var(--primary)',
+                  left: `${TIME_GUTTER_PX - 4}px`,
+                }}
+              />
+              <div
+                className="absolute -translate-y-1/2 rounded-md px-1.5 text-[10px] font-medium tabular-nums leading-tight py-0.5 shadow-sm"
+                style={{
+                  left: '6px',
+                  top: 0,
+                  background: 'var(--primary)',
+                  color: 'var(--primary-foreground)',
+                }}
+              >
+                {pad2(Math.floor(nowMin / 60))}:{pad2(nowMin % 60)}
+              </div>
+              <div
+                className="absolute size-1.5 rounded-full -translate-y-1/2"
+                style={{
+                  left: `${TIME_GUTTER_PX - 7}px`,
+                  top: 0,
+                  background: 'var(--primary)',
+                }}
+              />
+            </div>
+          )}
 
           {/* Drag-create preview */}
           {dragPreview !== null && (
