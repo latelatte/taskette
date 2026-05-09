@@ -19,6 +19,7 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  Keyboard,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -44,6 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from './components/ui/select.js';
+import { KeyboardHelpDialog } from './components/KeyboardHelpDialog.js';
 
 const SELECTED_CALENDAR_KEY = 'taskette/gcal-calendar-id';
 
@@ -133,6 +135,7 @@ export function App() {
   const [settingsView, setSettingsView] = useState<SettingsView>('menu');
   const [showSummary, setShowSummary] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectBudget, setNewProjectBudget] = useState('');
   const [newProjectColor, setNewProjectColor] = useState<string>(
@@ -209,6 +212,76 @@ export function App() {
     if (loadStatus !== 'ready') return;
     void saveStore({ blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules });
   }, [loadStatus, blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      // 入力欄フォーカス中はショートカット無効
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target !== null && target.isContentEditable)
+      ) return;
+
+      // Dialog 開いている時はキーを Dialog に委ねる (Esc は Radix が処理)
+      const hasOpenDialog =
+        document.querySelector('[data-slot="dialog-content"][data-state="open"]') !== null;
+      if (hasOpenDialog) return;
+
+      const cmdOrCtrl = e.metaKey || e.ctrlKey;
+
+      // 修飾キー付きショートカット
+      if (cmdOrCtrl && e.key === ',') {
+        e.preventDefault();
+        setSettingsView('menu');
+        setShowSettings(true);
+        return;
+      }
+
+      // 以下、修飾キーなしのショートカットのみ
+      if (cmdOrCtrl || e.altKey) return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          e.preventDefault();
+          setCurrentDate((d) => shiftViewDate(d, viewMode, -1));
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          setCurrentDate((d) => shiftViewDate(d, viewMode, 1));
+          break;
+        case 't':
+        case 'T':
+          setCurrentDate(today());
+          break;
+        case '1':
+          setViewMode('day');
+          break;
+        case '2':
+          setViewMode('week');
+          break;
+        case '3':
+          setViewMode('month');
+          break;
+        case '4':
+          setViewMode('year');
+          break;
+        case '[':
+          setSidebarCollapsed((c) => !c);
+          break;
+        case 's':
+        case 'S':
+          setShowSummary(true);
+          break;
+        case '?':
+          setShowKeyboardHelp(true);
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [viewMode]);
 
   const blocks: readonly TimeBlock[] = mergedBlocksByDate[currentDate] ?? [];
 
@@ -803,7 +876,7 @@ export function App() {
             variant="ghost"
             size="icon-sm"
             onClick={() => setShowSummary(true)}
-            title={`${formatJaYearMonth(yearMonthOf(currentDate))}のサマリー`}
+            title={`${formatJaYearMonth(yearMonthOf(currentDate))}のサマリー (S)`}
             aria-label="月次サマリー"
           >
             <BarChart3 />
@@ -811,8 +884,17 @@ export function App() {
           <Button
             variant="ghost"
             size="icon-sm"
+            onClick={() => setShowKeyboardHelp(true)}
+            title="キーボードショートカット (?)"
+            aria-label="キーボードショートカット"
+          >
+            <Keyboard />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
             onClick={openSettings}
-            title="設定"
+            title={`設定 (${/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl'} ,)`}
             aria-label="設定"
           >
             <Settings2 />
@@ -1788,6 +1870,8 @@ export function App() {
           </DialogContent>
         )}
       </Dialog>
+
+      <KeyboardHelpDialog open={showKeyboardHelp} onOpenChange={setShowKeyboardHelp} />
     </div>
   );
 }
