@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  effectiveBudgetPM,
   projectBudgetUsage,
   worstBudgetStatus,
   HOURS_PER_PERSON_MONTH,
@@ -97,6 +98,82 @@ describe('projectBudgetUsage', () => {
     // mid-month, actual very low → projectedUnder, not underConfirmed
     const u = projectBudgetUsage(proj(1), minutes(10), 0.5);
     expect(u.status).toBe('projectedUnder');
+  });
+});
+
+describe('effectiveBudgetPM', () => {
+  const projWithOverride = (
+    base?: number,
+    overrides?: Record<string, number>,
+  ): Project => ({
+    id: 'p1',
+    name: 'A',
+    color: '#000',
+    ...(base !== undefined ? { monthlyBudget: base } : {}),
+    ...(overrides !== undefined ? { monthlyBudgetOverrides: overrides } : {}),
+  });
+
+  it('returns monthlyBudget when no override set', () => {
+    expect(effectiveBudgetPM(projWithOverride(1.0), '2026-05')).toBe(1.0);
+  });
+
+  it('returns undefined when no budget and no override', () => {
+    expect(effectiveBudgetPM(projWithOverride(), '2026-05')).toBe(undefined);
+  });
+
+  it('returns override for matching month', () => {
+    expect(effectiveBudgetPM(projWithOverride(1.0, { '2026-05': 1.2 }), '2026-05')).toBe(1.2);
+  });
+
+  it('falls back to monthlyBudget when override is for a different month', () => {
+    expect(effectiveBudgetPM(projWithOverride(1.0, { '2026-04': 1.5 }), '2026-05')).toBe(1.0);
+  });
+
+  it('returns override even when no base monthlyBudget', () => {
+    expect(effectiveBudgetPM(projWithOverride(undefined, { '2026-05': 0.8 }), '2026-05')).toBe(0.8);
+  });
+
+  it('returns monthlyBudget when yearMonth is undefined', () => {
+    expect(effectiveBudgetPM(projWithOverride(1.0, { '2026-05': 1.2 }))).toBe(1.0);
+  });
+});
+
+describe('projectBudgetUsage with override', () => {
+  const projWithOverride = (
+    base: number,
+    overrides: Record<string, number>,
+  ): Project => ({
+    id: 'p1',
+    name: 'A',
+    color: '#000',
+    monthlyBudget: base,
+    monthlyBudgetOverrides: overrides,
+  });
+
+  it('uses override when yearMonth matches', () => {
+    // base=1PM (160h), override 2026-05 → 0.5PM (80h, low=70, high=90)
+    // actual=100h at elapsed=1 → over
+    const u = projectBudgetUsage(
+      projWithOverride(1, { '2026-05': 0.5 }),
+      minutes(100),
+      1,
+      '2026-05',
+    );
+    expect(u.budgetH).toBe(80);
+    expect(u.status).toBe('over');
+  });
+
+  it('uses base monthlyBudget when yearMonth does not match', () => {
+    // base=1PM (160h, high=180), override only for 2026-04
+    // actual=100h at elapsed=1 → underConfirmed (low=140)
+    const u = projectBudgetUsage(
+      projWithOverride(1, { '2026-04': 0.5 }),
+      minutes(100),
+      1,
+      '2026-05',
+    );
+    expect(u.budgetH).toBe(160);
+    expect(u.status).toBe('underConfirmed');
   });
 });
 

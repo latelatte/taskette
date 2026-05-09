@@ -1,5 +1,6 @@
-import type { DateString, Project, TimeBlock } from './domain/types.js';
+import type { DateString, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { DEFAULT_PROJECTS } from './projects.js';
+import { DEFAULT_TEMPLATES } from './templates.js';
 
 const STORAGE_KEY = 'taskette/v1';
 const SCHEMA_VERSION = 1;
@@ -8,11 +9,13 @@ const MINUTES_PER_DAY = 1440;
 export type StoredState = {
   blocksByDate: Record<DateString, readonly TimeBlock[]>;
   projects: readonly Project[];
+  templates: readonly TaskTemplate[];
 };
 
 const emptyState = (): StoredState => ({
   blocksByDate: {},
   projects: DEFAULT_PROJECTS,
+  templates: DEFAULT_TEMPLATES,
 });
 
 const isTimeBlock = (v: unknown): v is TimeBlock => {
@@ -28,6 +31,37 @@ const isTimeBlock = (v: unknown): v is TimeBlock => {
   return true;
 };
 
+const sanitizeProjectOverrides = (p: Project): Project => {
+  const ov = p.monthlyBudgetOverrides;
+  if (ov === undefined) return p;
+  const dropOverrides = (): Project => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    ...(p.monthlyBudget !== undefined ? { monthlyBudget: p.monthlyBudget } : {}),
+  });
+  if (typeof ov !== 'object' || ov === null || Array.isArray(ov)) return dropOverrides();
+  const clean: Record<string, number> = {};
+  for (const [k, val] of Object.entries(ov)) {
+    if (/^\d{4}-\d{2}$/.test(k) && typeof val === 'number' && Number.isFinite(val) && val >= 0) {
+      clean[k] = val;
+    }
+  }
+  if (Object.keys(clean).length === 0) return dropOverrides();
+  return { ...p, monthlyBudgetOverrides: clean };
+};
+
+const isTaskTemplate = (v: unknown): v is TaskTemplate => {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  if (typeof o.id !== 'string' || o.id.length === 0) return false;
+  if (typeof o.label !== 'string') return false;
+  if (typeof o.defaultDurationMin !== 'number' || !Number.isFinite(o.defaultDurationMin) || o.defaultDurationMin <= 0 || o.defaultDurationMin > MINUTES_PER_DAY) return false;
+  if (o.color !== undefined && typeof o.color !== 'string') return false;
+  if (o.projectId !== undefined && typeof o.projectId !== 'string') return false;
+  return true;
+};
+
 export const loadStore = (): StoredState => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -38,20 +72,53 @@ export const loadStore = (): StoredState => {
 
     if (obj.version !== SCHEMA_VERSION) return emptyState();
 
+    const projects: readonly Project[] = Array.isArray(obj.projects)
+      ? (obj.projects as readonly Project[]).map(sanitizeProjectOverrides)
+      : DEFAULT_PROJECTS;
+
+    const validProjectIds = new Set(projects.map((p) => p.id));
+
+    const stripBlockProjectId = (b: TimeBlock): TimeBlock => ({
+      id: b.id,
+      label: b.label,
+      start: b.start,
+      durationMin: b.durationMin,
+      ...(b.templateId !== undefined ? { templateId: b.templateId } : {}),
+    });
+
+    const stripTemplateProjectId = (t: TaskTemplate): TaskTemplate => ({
+      id: t.id,
+      label: t.label,
+      defaultDurationMin: t.defaultDurationMin,
+      ...(t.color !== undefined ? { color: t.color } : {}),
+    });
+
     const blocksByDate: Record<DateString, readonly TimeBlock[]> = {};
     if (typeof obj.blocksByDate === 'object' && obj.blocksByDate !== null) {
       for (const [date, dayBlocks] of Object.entries(obj.blocksByDate)) {
         if (!Array.isArray(dayBlocks)) continue;
-        const valid = dayBlocks.filter(isTimeBlock);
+        const valid = dayBlocks
+          .filter(isTimeBlock)
+          .map((b) =>
+            b.projectId !== undefined && !validProjectIds.has(b.projectId)
+              ? stripBlockProjectId(b)
+              : b,
+          );
         if (valid.length > 0) blocksByDate[date] = valid;
       }
     }
 
-    const projects: readonly Project[] = Array.isArray(obj.projects)
-      ? (obj.projects as readonly Project[])
-      : DEFAULT_PROJECTS;
+    const templates: readonly TaskTemplate[] = Array.isArray(obj.templates)
+      ? obj.templates
+          .filter(isTaskTemplate)
+          .map((t) =>
+            t.projectId !== undefined && !validProjectIds.has(t.projectId)
+              ? stripTemplateProjectId(t)
+              : t,
+          )
+      : DEFAULT_TEMPLATES;
 
-    return { blocksByDate, projects };
+    return { blocksByDate, projects, templates };
   } catch {
     return emptyState();
   }

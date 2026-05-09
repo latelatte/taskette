@@ -25,14 +25,26 @@ export type BudgetUsage = {
   readonly barFraction: number;
 };
 
+export const effectiveBudgetPM = (
+  project: Project,
+  yearMonth?: string,
+): number | undefined => {
+  if (yearMonth !== undefined && project.monthlyBudgetOverrides !== undefined) {
+    const override = project.monthlyBudgetOverrides[yearMonth];
+    if (override !== undefined) return override;
+  }
+  return project.monthlyBudget;
+};
+
 export const projectBudgetUsage = (
   project: Project,
   actualMinutes: number,
   elapsed: number,
+  yearMonth?: string,
 ): BudgetUsage => {
   const actualH = actualMinutes / 60;
   const actualPM = actualH / HOURS_PER_PERSON_MONTH;
-  const budgetPM = project.monthlyBudget;
+  const budgetPM = effectiveBudgetPM(project, yearMonth);
 
   if (budgetPM === undefined) {
     return {

@@ -7,6 +7,7 @@ export type Project = {
   readonly name: string;
   readonly color: string;
   readonly monthlyBudget?: number;
+  readonly monthlyBudgetOverrides?: Readonly<Record<string, number>>;
 };
 
 export type TaskTemplate = {

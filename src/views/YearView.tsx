@@ -42,7 +42,7 @@ export function YearView({ currentDate, blocksByDate, projects, projectById, onM
 
       const usages = projects.map((p) => ({
         project: p,
-        usage: projectBudgetUsage(p, agg.byProject.get(p.id) ?? 0, elapsed),
+        usage: projectBudgetUsage(p, agg.byProject.get(p.id) ?? 0, elapsed, ym),
       }));
 
       const budgetedUsages = usages.filter((u) => u.usage.status !== 'noBudget');

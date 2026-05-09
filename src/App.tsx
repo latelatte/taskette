@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import type { DateString, Project, TaskTemplate, TimeBlock } from './domain/types.js';
-import { SAMPLE_TEMPLATES } from './templates.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
 import { addDays, addMonths, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
 import type { ViewMode } from './views/types.js';
@@ -10,7 +9,7 @@ import { MonthView } from './views/MonthView.js';
 import { YearView } from './views/YearView.js';
 import { loadStore, saveStore } from './storage.js';
 import { aggregateMonthly } from './domain/aggregate.js';
-import { projectBudgetUsage } from './domain/budget.js';
+import { effectiveBudgetPM, projectBudgetUsage } from './domain/budget.js';
 
 const fmtH = (h: number): string => {
   const r = Math.round(h * 10) / 10;
@@ -23,6 +22,21 @@ const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   start: b.start,
   durationMin: b.durationMin,
   ...(b.templateId !== undefined ? { templateId: b.templateId } : {}),
+});
+
+const blockWithoutTemplate = (b: TimeBlock): TimeBlock => ({
+  id: b.id,
+  label: b.label,
+  start: b.start,
+  durationMin: b.durationMin,
+  ...(b.projectId !== undefined ? { projectId: b.projectId } : {}),
+});
+
+const templateWithoutProject = (t: TaskTemplate): TaskTemplate => ({
+  id: t.id,
+  label: t.label,
+  defaultDurationMin: t.defaultDurationMin,
+  ...(t.color !== undefined ? { color: t.color } : {}),
 });
 
 const shiftViewDate = (s: DateString, mode: ViewMode, delta: number): DateString => {
@@ -39,10 +53,12 @@ export function App() {
     () => loadStore().blocksByDate,
   );
   const [projects, setProjects] = useState<readonly Project[]>(() => loadStore().projects);
+  const [templates, setTemplates] = useState<readonly TaskTemplate[]>(() => loadStore().templates);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [showTemplateSettings, setShowTemplateSettings] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectBudget, setNewProjectBudget] = useState('');
@@ -50,10 +66,19 @@ export function App() {
     PROJECT_COLOR_PALETTE[0] ?? '#64748b',
   );
   const [colorPickerProjectId, setColorPickerProjectId] = useState<string | null>(null);
+  const [newTemplateLabel, setNewTemplateLabel] = useState('');
+  const [newTemplateDuration, setNewTemplateDuration] = useState('30');
+  const [newTemplateProjectId, setNewTemplateProjectId] = useState<string>('');
+  const [newTemplateColor, setNewTemplateColor] = useState<string>(
+    PROJECT_COLOR_PALETTE[0] ?? '#64748b',
+  );
+  const [colorPickerTemplateId, setColorPickerTemplateId] = useState<string | null>(null);
+  const [editingMonthBudgetProjectId, setEditingMonthBudgetProjectId] = useState<string | null>(null);
+  const [editingMonthBudgetValue, setEditingMonthBudgetValue] = useState('');
 
   useEffect(() => {
-    saveStore({ blocksByDate, projects });
-  }, [blocksByDate, projects]);
+    saveStore({ blocksByDate, projects, templates });
+  }, [blocksByDate, projects, templates]);
 
   const blocks: readonly TimeBlock[] = blocksByDate[currentDate] ?? [];
 
@@ -69,9 +94,9 @@ export function App() {
 
   const templateById = useMemo(() => {
     const m = new Map<string, TaskTemplate>();
-    for (const t of SAMPLE_TEMPLATES) m.set(t.id, t);
+    for (const t of templates) m.set(t.id, t);
     return m;
-  }, []);
+  }, [templates]);
 
   const projectById = useMemo(() => {
     const m = new Map<string, Project>();
@@ -127,6 +152,52 @@ export function App() {
     setNewProjectBudget('');
   };
 
+  const beginEditMonthBudget = (projectId: string, currentValue: number | undefined): void => {
+    setEditingMonthBudgetProjectId(projectId);
+    setEditingMonthBudgetValue(currentValue !== undefined ? String(currentValue) : '');
+  };
+
+  const cancelEditMonthBudget = (): void => {
+    setEditingMonthBudgetProjectId(null);
+    setEditingMonthBudgetValue('');
+  };
+
+  const saveMonthBudgetOverride = (projectId: string, ym: string): void => {
+    const trimmed = editingMonthBudgetValue.trim();
+    if (trimmed === '') return;
+    const num = parseFloat(trimmed);
+    if (!Number.isFinite(num) || num < 0) return;
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        const existing = p.monthlyBudgetOverrides ?? {};
+        return { ...p, monthlyBudgetOverrides: { ...existing, [ym]: num } };
+      }),
+    );
+    cancelEditMonthBudget();
+  };
+
+  const clearMonthBudgetOverride = (projectId: string, ym: string): void => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        if (p.monthlyBudgetOverrides === undefined) return p;
+        const next = { ...p.monthlyBudgetOverrides };
+        delete next[ym];
+        if (Object.keys(next).length === 0) {
+          return {
+            id: p.id,
+            name: p.name,
+            color: p.color,
+            ...(p.monthlyBudget !== undefined ? { monthlyBudget: p.monthlyBudget } : {}),
+          };
+        }
+        return { ...p, monthlyBudgetOverrides: next };
+      }),
+    );
+    cancelEditMonthBudget();
+  };
+
   const updateProjectBudget = (id: string, value: string): void => {
     setProjects((prev) =>
       prev.map((p) => {
@@ -158,6 +229,68 @@ export function App() {
       const next: Record<DateString, readonly TimeBlock[]> = {};
       for (const [date, dayBlocks] of Object.entries(prev)) {
         next[date] = dayBlocks.map((b) => (b.projectId === id ? blockWithoutProject(b) : b));
+      }
+      return next;
+    });
+    setTemplates((prev) =>
+      prev.map((t) => (t.projectId === id ? templateWithoutProject(t) : t)),
+    );
+  };
+
+  const submitNewTemplate = (): void => {
+    const trimmed = newTemplateLabel.trim();
+    if (trimmed.length === 0) return;
+    const dur = parseInt(newTemplateDuration, 10);
+    if (!Number.isFinite(dur) || dur <= 0 || dur > 1440) return;
+    setTemplates((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        label: trimmed,
+        defaultDurationMin: dur,
+        color: newTemplateColor,
+        ...(newTemplateProjectId !== '' ? { projectId: newTemplateProjectId } : {}),
+      },
+    ]);
+    setNewTemplateLabel('');
+    setNewTemplateDuration('30');
+    setNewTemplateProjectId('');
+  };
+
+  const renameTemplate = (id: string, label: string): void => {
+    const trimmed = label.trim();
+    if (trimmed.length === 0) return;
+    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, label: trimmed } : t)));
+  };
+
+  const updateTemplateDuration = (id: string, value: string): void => {
+    const trimmed = value.trim();
+    if (trimmed === '') return;
+    const num = parseInt(trimmed, 10);
+    if (!Number.isFinite(num) || num <= 0 || num > 1440) return;
+    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, defaultDurationMin: num } : t)));
+  };
+
+  const updateTemplateProject = (id: string, projectId: string): void => {
+    setTemplates((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        if (projectId === '') return templateWithoutProject(t);
+        return { ...t, projectId };
+      }),
+    );
+  };
+
+  const recolorTemplate = (id: string, color: string): void => {
+    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, color } : t)));
+  };
+
+  const handleDeleteTemplate = (id: string): void => {
+    setTemplates((prev) => prev.filter((t) => t.id !== id));
+    setBlocksByDate((prev) => {
+      const next: Record<DateString, readonly TimeBlock[]> = {};
+      for (const [date, dayBlocks] of Object.entries(prev)) {
+        next[date] = dayBlocks.map((b) => (b.templateId === id ? blockWithoutTemplate(b) : b));
       }
       return next;
     });
@@ -210,10 +343,20 @@ export function App() {
           )}
         </div>
 
-        <h2 style={{ fontSize: '13px', margin: '0 0 8px', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          テンプレート
-        </h2>
-        {SAMPLE_TEMPLATES.map((t) => {
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <h2 style={{ fontSize: '13px', margin: 0, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            テンプレート
+          </h2>
+          <button
+            onClick={() => setShowTemplateSettings(true)}
+            title="テンプレート設定"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '2px 6px', borderRadius: '4px' }}
+          >⚙</button>
+        </div>
+        {templates.length === 0 && (
+          <div style={{ fontSize: '11px', color: '#9ca3af', padding: '4px 6px' }}>テンプレート未登録</div>
+        )}
+        {templates.map((t) => {
           const proj = t.projectId !== undefined ? projectById.get(t.projectId) : undefined;
           const accent = proj?.color ?? t.color ?? '#94a3b8';
           const dragEnabled = viewMode === 'day';
@@ -555,6 +698,220 @@ export function App() {
         </div>
       )}
 
+      {showTemplateSettings && (
+        <div
+          onClick={() => { setShowTemplateSettings(false); setColorPickerTemplateId(null); }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: '8px',
+              padding: '20px',
+              minWidth: '480px',
+              maxWidth: '90vw',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ margin: 0, fontSize: '15px' }}>テンプレート設定</h2>
+              <button
+                onClick={() => { setShowTemplateSettings(false); setColorPickerTemplateId(null); }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
+                aria-label="閉じる"
+              >×</button>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              {templates.length === 0 ? (
+                <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>テンプレートが登録されておりません</div>
+              ) : (
+                templates.map((t) => {
+                  const pickerOpen = colorPickerTemplateId === t.id;
+                  const swatchColor = t.color ?? (t.projectId !== undefined ? projectById.get(t.projectId)?.color : undefined) ?? '#94a3b8';
+                  return (
+                    <div key={t.id} style={{ padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button
+                          onClick={() => setColorPickerTemplateId(pickerOpen ? null : t.id)}
+                          title="色を変更"
+                          aria-label="色を変更"
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: 4,
+                            background: swatchColor,
+                            border: pickerOpen ? '2px solid #1f2937' : '1px solid rgba(0,0,0,0.1)',
+                            flexShrink: 0,
+                            cursor: 'pointer',
+                            padding: 0,
+                          }}
+                        />
+                        <input
+                          value={t.label}
+                          onChange={(e) => renameTemplate(t.id, e.currentTarget.value)}
+                          placeholder="ラベル"
+                          style={{ flex: 1, fontSize: '13px', padding: '3px 6px', border: '1px solid #e5e7eb', borderRadius: '4px', outline: 'none', background: 'white' }}
+                        />
+                        <input
+                          type="number"
+                          min="1"
+                          max="1440"
+                          step="5"
+                          value={t.defaultDurationMin}
+                          onChange={(e) => updateTemplateDuration(t.id, e.currentTarget.value)}
+                          title="既定時間 (分)"
+                          style={{ width: 64, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
+                        />
+                        <select
+                          value={t.projectId ?? ''}
+                          onChange={(e) => updateTemplateProject(t.id, e.currentTarget.value)}
+                          title="案件"
+                          style={{ maxWidth: 120, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none', background: 'white', color: '#1f2937' }}
+                        >
+                          <option value="">— 未割当 —</option>
+                          {projects.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => handleDeleteTemplate(t.id)}
+                          style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
+                        >削除</button>
+                      </div>
+                      {pickerOpen && (
+                        <div style={{ display: 'flex', gap: '6px', marginTop: '8px', paddingLeft: '28px', flexWrap: 'wrap' }}>
+                          {PROJECT_COLOR_PALETTE.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                recolorTemplate(t.id, c);
+                                setColorPickerTemplateId(null);
+                              }}
+                              title={c}
+                              style={{
+                                width: 22,
+                                height: 22,
+                                borderRadius: 4,
+                                background: c,
+                                border: t.color === c ? '2px solid #1f2937' : '2px solid transparent',
+                                cursor: 'pointer',
+                                padding: 0,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
+              <div style={{ fontSize: '12px', color: '#374151', marginBottom: '8px', fontWeight: 600 }}>新しいテンプレートを追加</div>
+              <input
+                value={newTemplateLabel}
+                onChange={(e) => setNewTemplateLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitNewTemplate();
+                }}
+                placeholder="ラベル (例: ☕ コーヒー)"
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '4px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  step="5"
+                  value={newTemplateDuration}
+                  onChange={(e) => setNewTemplateDuration(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitNewTemplate();
+                  }}
+                  placeholder="分"
+                  title="既定時間 (分)"
+                  style={{
+                    width: 80,
+                    padding: '6px 8px',
+                    fontSize: '13px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '4px',
+                    outline: 'none',
+                  }}
+                />
+                <select
+                  value={newTemplateProjectId}
+                  onChange={(e) => setNewTemplateProjectId(e.target.value)}
+                  style={{ flex: 1, padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none', background: 'white', color: '#1f2937' }}
+                >
+                  <option value="">— 案件未割当 —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                {PROJECT_COLOR_PALETTE.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setNewTemplateColor(c)}
+                    title={c}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 4,
+                      background: c,
+                      border: newTemplateColor === c ? '2px solid #1f2937' : '2px solid transparent',
+                      cursor: 'pointer',
+                      padding: 0,
+                    }}
+                  />
+                ))}
+              </div>
+              <button
+                onClick={submitNewTemplate}
+                disabled={newTemplateLabel.trim().length === 0}
+                style={{
+                  marginTop: '10px',
+                  width: '100%',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  background: '#2563eb',
+                  color: 'white',
+                  border: 'none',
+                  fontSize: '13px',
+                  cursor: newTemplateLabel.trim().length > 0 ? 'pointer' : 'not-allowed',
+                  opacity: newTemplateLabel.trim().length > 0 ? 1 : 0.5,
+                }}
+              >追加</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSummary && (
         <div
           onClick={() => setShowSummary(false)}
@@ -604,8 +961,10 @@ export function App() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                       {projects.map((p) => {
                         const minutes = aggregate.byProject.get(p.id) ?? 0;
-                        const u = projectBudgetUsage(p, minutes, elapsed);
-                        const budgetPM = p.monthlyBudget;
+                        const u = projectBudgetUsage(p, minutes, elapsed, ym);
+                        const effectivePM = effectiveBudgetPM(p, ym);
+                        const hasOverride = p.monthlyBudgetOverrides?.[ym] !== undefined;
+                        const isEditingThis = editingMonthBudgetProjectId === p.id;
                         const barColor = u.status === 'over'
                           ? '#dc2626'
                           : u.status === 'projectedOver'
@@ -620,11 +979,56 @@ export function App() {
                               <span style={{ fontSize: '13px', flex: 1 }}>{p.name}</span>
                               <span style={{ fontSize: '12px', color: '#374151' }}>
                                 {u.actualPM.toFixed(2)}人月 ({u.actualH.toFixed(1)}h)
-                                {budgetPM !== undefined && (
-                                  <span style={{ color: '#6b7280' }}> / {budgetPM}人月 ({Math.round(u.ratio * 100)}%)</span>
+                                {effectivePM !== undefined && (
+                                  <span style={{ color: '#6b7280' }}>
+                                    {' / '}{effectivePM}人月 ({Math.round(u.ratio * 100)}%)
+                                    {hasOverride && (
+                                      <span style={{ marginLeft: '4px', color: '#2563eb', fontSize: '10px', fontWeight: 600 }}>(今月のみ)</span>
+                                    )}
+                                  </span>
                                 )}
                               </span>
+                              <button
+                                onClick={() => isEditingThis ? cancelEditMonthBudget() : beginEditMonthBudget(p.id, effectivePM)}
+                                title="今月の予算を変更"
+                                aria-label="今月の予算を変更"
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: isEditingThis ? '#2563eb' : '#9ca3af', padding: '0 4px' }}
+                              >✎</button>
                             </div>
+                            {isEditingThis && (
+                              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', paddingLeft: '18px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <input
+                                  type="number"
+                                  step="0.05"
+                                  min="0"
+                                  value={editingMonthBudgetValue}
+                                  onChange={(e) => setEditingMonthBudgetValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') saveMonthBudgetOverride(p.id, ym);
+                                    else if (e.key === 'Escape') cancelEditMonthBudget();
+                                  }}
+                                  autoFocus
+                                  placeholder="人月"
+                                  style={{ width: 80, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
+                                />
+                                <button
+                                  onClick={() => saveMonthBudgetOverride(p.id, ym)}
+                                  disabled={editingMonthBudgetValue.trim() === ''}
+                                  style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: editingMonthBudgetValue.trim() === '' ? 'not-allowed' : 'pointer', opacity: editingMonthBudgetValue.trim() === '' ? 0.5 : 1 }}
+                                >保存</button>
+                                {hasOverride && (
+                                  <button
+                                    onClick={() => clearMonthBudgetOverride(p.id, ym)}
+                                    title="今月のオーバーライドを解除して通常の予算に戻す"
+                                    style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
+                                  >解除</button>
+                                )}
+                                <button
+                                  onClick={cancelEditMonthBudget}
+                                  style={{ background: 'white', color: '#6b7280', border: '1px solid #d1d5db', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
+                                >キャンセル</button>
+                              </div>
+                            )}
                             {u.budgetH !== null && (
                               <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
                                 <div style={{
