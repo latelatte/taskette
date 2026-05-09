@@ -1,4 +1,4 @@
-import type { DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { Day } from '../domain/day.js';
 import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from '../domain/types.js';
 import { DailyActualStrip } from './DailyActualStrip.js';
@@ -8,11 +8,17 @@ const SNAP_MIN = 15;
 const FREEFORM_DEFAULT_DURATION = 30;
 const DEFAULT_LABEL = '新規ブロック';
 const FALLBACK_BLOCK_COLOR = '#64748b';
+const MIN_DRAG_DURATION = 15;
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 const snapMinutes = (mins: number): MinuteOfDay =>
   Math.round(Math.max(0, mins) / SNAP_MIN) * SNAP_MIN;
+
+type DragCreateState = {
+  readonly startMin: MinuteOfDay;
+  readonly currentMin: MinuteOfDay;
+};
 
 type DayViewProps = {
   readonly currentDate: DateString;
@@ -33,6 +39,9 @@ export function DayView(props: DayViewProps) {
     currentDate, blocks, setBlocks, blocksByDate, projects, projectById, templateById,
     setError, openBlockEdit,
   } = props;
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [dragCreate, setDragCreate] = useState<DragCreateState | null>(null);
 
   const blockColor = (b: TimeBlock): string => {
     if (b.projectId !== undefined) {
@@ -130,13 +139,93 @@ export function DayView(props: DayViewProps) {
     }
   };
 
+  const yToMinute = (clientY: number): number => {
+    const sc = scrollContainerRef.current;
+    if (sc === null) return 0;
+    const rect = sc.getBoundingClientRect();
+    return (clientY - rect.top + sc.scrollTop) / PX_PER_MIN;
+  };
+
+  const handleSlotMouseDown = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const start = snapMinutes(yToMinute(e.clientY));
+    setDragCreate({ startMin: start, currentMin: start });
+  };
+
+  // refs to access latest applyPlace/openBlockEdit/blocks without re-running drag effect
+  const applyPlaceRef = useRef(applyPlace);
+  applyPlaceRef.current = applyPlace;
+  const openBlockEditRef = useRef(openBlockEdit);
+  openBlockEditRef.current = openBlockEdit;
+  const dragCreateRef = useRef(dragCreate);
+  dragCreateRef.current = dragCreate;
+
+  const isDragging = dragCreate !== null;
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e: MouseEvent): void => {
+      const cur = snapMinutes(yToMinute(e.clientY));
+      setDragCreate((prev) => (prev === null ? null : { ...prev, currentMin: cur }));
+    };
+    const onUp = (): void => {
+      const drag = dragCreateRef.current;
+      setDragCreate(null);
+      if (drag === null) return;
+      const a = Math.min(drag.startMin, drag.currentMin);
+      const b = Math.max(drag.startMin, drag.currentMin);
+      const duration = b - a;
+      if (duration < MIN_DRAG_DURATION) return;
+      const newBlock: TimeBlock = {
+        id: crypto.randomUUID(),
+        label: DEFAULT_LABEL,
+        start: a,
+        durationMin: duration,
+      };
+      if (applyPlaceRef.current(newBlock, a)) {
+        openBlockEditRef.current(newBlock);
+      }
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setDragCreate(null);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isDragging]);
+
+  const dragPreview = (() => {
+    if (dragCreate === null) return null;
+    const a = Math.min(dragCreate.startMin, dragCreate.currentMin);
+    const b = Math.max(dragCreate.startMin, dragCreate.currentMin);
+    const duration = b - a;
+    if (duration < MIN_DRAG_DURATION) return null;
+    const overlaps = blocks.some(
+      (blk) => a < blk.start + blk.durationMin && blk.start < b,
+    );
+    return { a, b, duration, overlaps };
+  })();
+
   return (
     <>
       <DailyActualStrip blocksByDate={blocksByDate} currentDate={currentDate} projects={projects} />
       <div
+        ref={scrollContainerRef}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
-        style={{ flex: 1, overflow: 'auto', position: 'relative', background: '#fafafa' }}
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          position: 'relative',
+          background: '#fafafa',
+          userSelect: isDragging ? 'none' : 'auto',
+        }}
       >
         <div style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}>
           {Array.from({ length: 48 }).map((_, i) => {
@@ -145,7 +234,8 @@ export function DayView(props: DayViewProps) {
               <div
                 key={`slot-${i}`}
                 onDoubleClick={() => handleCreateAt(minute)}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.08)'; }}
+                onMouseDown={handleSlotMouseDown}
+                onMouseEnter={(e) => { if (!isDragging) e.currentTarget.style.background = 'rgba(99,102,241,0.08)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                 style={{
                   position: 'absolute',
@@ -155,6 +245,7 @@ export function DayView(props: DayViewProps) {
                   height: `${30 * PX_PER_MIN}px`,
                   background: 'transparent',
                   transition: 'background 80ms',
+                  cursor: isDragging ? 'ns-resize' : 'pointer',
                 }}
               />
             );
@@ -213,6 +304,30 @@ export function DayView(props: DayViewProps) {
               </div>
             );
           })}
+
+          {dragPreview !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                top: `${dragPreview.a * PX_PER_MIN}px`,
+                height: `${dragPreview.duration * PX_PER_MIN}px`,
+                left: '6px',
+                right: '14px',
+                background: dragPreview.overlaps ? 'rgba(220, 38, 38, 0.18)' : 'rgba(37, 99, 235, 0.18)',
+                border: `2px dashed ${dragPreview.overlaps ? '#dc2626' : '#2563eb'}`,
+                borderRadius: '5px',
+                padding: '4px 8px',
+                color: dragPreview.overlaps ? '#991b1b' : '#1e40af',
+                fontSize: '11px',
+                fontWeight: 600,
+                pointerEvents: 'none',
+                zIndex: 5,
+              }}
+            >
+              {formatMinute(dragPreview.a)} – {formatMinute(dragPreview.b)} ({dragPreview.duration}分)
+              {dragPreview.overlaps && <span style={{ marginLeft: '6px' }}>⚠ 重なり</span>}
+            </div>
+          )}
         </div>
       </div>
     </>
