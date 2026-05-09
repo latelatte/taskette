@@ -1,25 +1,16 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
-import { Day } from './domain/day.js';
-import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { DateString, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { SAMPLE_TEMPLATES } from './templates.js';
-import { DEFAULT_PROJECTS, PROJECT_COLOR_PALETTE } from './projects.js';
-import { addDays, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf } from './dates.js';
+import { PROJECT_COLOR_PALETTE } from './projects.js';
+import { addDays, addMonths, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
+import type { ViewMode } from './views/types.js';
+import { DayView } from './views/DayView.js';
+import { WeekView } from './views/WeekView.js';
+import { MonthView } from './views/MonthView.js';
+import { YearView } from './views/YearView.js';
 import { loadStore, saveStore } from './storage.js';
-import { aggregateDaily, aggregateMonthly } from './domain/aggregate.js';
-
-const PX_PER_MIN = 1;
-const SNAP_MIN = 15;
-const FREEFORM_DEFAULT_DURATION = 30;
-const DEFAULT_LABEL = '新規ブロック';
-const FALLBACK_BLOCK_COLOR = '#64748b';
-const HOURS_PER_PERSON_MONTH = 160;
-const TOLERANCE_HOURS_PER_PM = 20;
-const PROJECTION_MIN_ELAPSED = 0.2;
-
-const pad2 = (n: number): string => n.toString().padStart(2, '0');
-const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
-const snapMinutes = (mins: number): MinuteOfDay =>
-  Math.round(Math.max(0, mins) / SNAP_MIN) * SNAP_MIN;
+import { aggregateMonthly } from './domain/aggregate.js';
+import { projectBudgetUsage } from './domain/budget.js';
 
 const fmtH = (h: number): string => {
   const r = Math.round(h * 10) / 10;
@@ -34,8 +25,16 @@ const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   ...(b.templateId !== undefined ? { templateId: b.templateId } : {}),
 });
 
+const shiftViewDate = (s: DateString, mode: ViewMode, delta: number): DateString => {
+  if (mode === 'day') return addDays(s, delta);
+  if (mode === 'week') return addDays(s, delta * 7);
+  if (mode === 'month') return `${addMonths(s, delta).slice(0, 7)}-01`;
+  return `${addMonths(s, delta * 12).slice(0, 7)}-01`;
+};
+
 export function App() {
   const [currentDate, setCurrentDate] = useState<DateString>(today);
+  const [viewMode, setViewMode] = useState<ViewMode>('day');
   const [blocksByDate, setBlocksByDate] = useState<Record<DateString, readonly TimeBlock[]>>(
     () => loadStore().blocksByDate,
   );
@@ -79,112 +78,10 @@ export function App() {
     return m;
   }, [projects]);
 
-  const blockColor = (b: TimeBlock): string => {
-    if (b.projectId !== undefined) {
-      const p = projectById.get(b.projectId);
-      if (p) return p.color;
-    }
-    if (b.templateId !== undefined) {
-      const t = templateById.get(b.templateId);
-      if (t?.color !== undefined) return t.color;
-    }
-    return FALLBACK_BLOCK_COLOR;
-  };
-
-  const applyPlace = (newBlock: TimeBlock, snappedForError: MinuteOfDay): boolean => {
-    const day = new Day(currentDate, blocks);
-    const result = day.place(newBlock);
-    if (result.ok) {
-      setBlocks(day.blocks);
-      setError(null);
-      return true;
-    }
-    if (result.reason === 'overlap') {
-      setError(`重なっていますわ — ${formatMinute(snappedForError)} は他のブロックと衝突しています`);
-    } else {
-      setError(result.message);
-    }
-    return false;
-  };
-
-  const applyMove = (id: string, newStart: MinuteOfDay): void => {
-    const day = new Day(currentDate, blocks);
-    const result = day.move(id, newStart);
-    if (result.ok) {
-      setBlocks(day.blocks);
-      setError(null);
-    } else if (result.reason === 'overlap') {
-      setError(`移動できませんでしたわ — ${formatMinute(newStart)} で他のブロックと衝突しています`);
-    } else {
-      setError(result.message);
-    }
-  };
-
   const handleTemplateDragStart = (e: DragEvent<HTMLDivElement>, templateId: string): void => {
     e.dataTransfer.setData('kind', 'template');
     e.dataTransfer.setData('templateId', templateId);
     e.dataTransfer.effectAllowed = 'copy';
-  };
-
-  const handleBlockDragStart = (e: DragEvent<HTMLDivElement>, blockId: string): void => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const offsetMin = (e.clientY - rect.top) / PX_PER_MIN;
-    e.dataTransfer.setData('kind', 'block');
-    e.dataTransfer.setData('blockId', blockId);
-    e.dataTransfer.setData('offsetMin', String(offsetMin));
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e: DragEvent<HTMLDivElement>): void => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e: DragEvent<HTMLDivElement>): void => {
-    e.preventDefault();
-    const kind = e.dataTransfer.getData('kind');
-    const target = e.currentTarget;
-    const rect = target.getBoundingClientRect();
-    const yMin = (e.clientY - rect.top + target.scrollTop) / PX_PER_MIN;
-
-    if (kind === 'template') {
-      const templateId = e.dataTransfer.getData('templateId');
-      const tmpl = templateById.get(templateId);
-      if (!tmpl) return;
-      const snapped = snapMinutes(yMin);
-      const newBlock: TimeBlock = {
-        id: crypto.randomUUID(),
-        label: tmpl.label,
-        start: snapped,
-        durationMin: tmpl.defaultDurationMin,
-        templateId: tmpl.id,
-        ...(tmpl.projectId !== undefined ? { projectId: tmpl.projectId } : {}),
-      };
-      applyPlace(newBlock, snapped);
-    } else if (kind === 'block') {
-      const blockId = e.dataTransfer.getData('blockId');
-      const offsetStr = e.dataTransfer.getData('offsetMin');
-      const offsetMin = offsetStr.length > 0 ? parseFloat(offsetStr) : 0;
-      const snapped = snapMinutes(yMin - offsetMin);
-      applyMove(blockId, snapped);
-    }
-  };
-
-  const handleCreateAt = (minute: MinuteOfDay): void => {
-    const newBlock: TimeBlock = {
-      id: crypto.randomUUID(),
-      label: DEFAULT_LABEL,
-      start: minute,
-      durationMin: FREEFORM_DEFAULT_DURATION,
-    };
-    if (applyPlace(newBlock, minute)) {
-      beginEdit(newBlock);
-    }
-  };
-
-  const handleRemove = (id: string): void => {
-    setBlocks((prev) => prev.filter((b) => b.id !== id));
-    if (editingId === id) setEditingId(null);
-    setError(null);
   };
 
   const commitEdit = (id: string, rawLabel: string): void => {
@@ -255,13 +152,26 @@ export function App() {
     });
   };
 
-  const navigateTo = (date: DateString): void => {
+  const navigateToDate = (date: DateString, mode: ViewMode = viewMode): void => {
     if (editingId !== null) commitEdit(editingId, editLabel);
     setError(null);
     setCurrentDate(date);
+    setViewMode(mode);
   };
 
   const isToday = currentDate === today();
+
+  const headerDateLabel = ((): string => {
+    if (viewMode === 'day') return formatJaDate(currentDate);
+    if (viewMode === 'week') {
+      const days = daysOfWeek(currentDate);
+      const start = days[0] as DateString;
+      const end = days[6] as DateString;
+      return `${formatJaDate(start)} – ${formatJaDate(end).split(' ')[0]}`;
+    }
+    if (viewMode === 'month') return formatJaYearMonth(yearMonthOf(currentDate));
+    return `${yearOf(currentDate)}年`;
+  })();
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
@@ -295,11 +205,13 @@ export function App() {
         {SAMPLE_TEMPLATES.map((t) => {
           const proj = t.projectId !== undefined ? projectById.get(t.projectId) : undefined;
           const accent = proj?.color ?? t.color ?? '#94a3b8';
+          const dragEnabled = viewMode === 'day';
           return (
             <div
               key={t.id}
-              draggable
+              draggable={dragEnabled}
               onDragStart={(e) => handleTemplateDragStart(e, t.id)}
+              title={dragEnabled ? undefined : '日ビューで配置できます'}
               style={{
                 background: 'white',
                 border: '1px solid #e5e7eb',
@@ -307,10 +219,11 @@ export function App() {
                 padding: '8px 10px',
                 marginBottom: '6px',
                 borderRadius: '6px',
-                cursor: 'grab',
+                cursor: dragEnabled ? 'grab' : 'default',
                 fontSize: '13px',
                 userSelect: 'none',
                 boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+                opacity: dragEnabled ? 1 : 0.5,
               }}
             >
               <div>{t.label}</div>
@@ -333,34 +246,57 @@ export function App() {
           <h1 style={{ fontSize: '15px', margin: 0, fontWeight: 600 }}>taskette</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button
-              onClick={() => navigateTo(addDays(currentDate, -1))}
-              title="前日"
+              onClick={() => navigateToDate(shiftViewDate(currentDate, viewMode, -1))}
+              title="前へ"
               style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#1f2937' }}
             >◀</button>
-            <span style={{ fontSize: '13px', minWidth: '170px', textAlign: 'center', color: '#1f2937', fontWeight: isToday ? 600 : 400 }}>
-              {formatJaDate(currentDate)}{isToday && <span style={{ marginLeft: '6px', fontSize: '10px', color: '#2563eb' }}>(今日)</span>}
+            <span style={{ fontSize: '13px', minWidth: '220px', textAlign: 'center', color: '#1f2937', fontWeight: isToday && viewMode === 'day' ? 600 : 400 }}>
+              {headerDateLabel}{isToday && viewMode === 'day' && <span style={{ marginLeft: '6px', fontSize: '10px', color: '#2563eb' }}>(今日)</span>}
             </span>
             <button
-              onClick={() => navigateTo(addDays(currentDate, 1))}
-              title="翌日"
+              onClick={() => navigateToDate(shiftViewDate(currentDate, viewMode, 1))}
+              title="次へ"
               style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#1f2937' }}
             >▶</button>
             <button
-              onClick={() => navigateTo(today())}
-              disabled={isToday}
+              onClick={() => navigateToDate(today())}
+              disabled={isToday && viewMode === 'day'}
               title="今日へジャンプ"
               style={{
-                background: isToday ? '#f3f4f6' : 'white',
+                background: isToday && viewMode === 'day' ? '#f3f4f6' : 'white',
                 border: '1px solid #d1d5db',
                 borderRadius: '4px',
                 padding: '4px 10px',
                 fontSize: '12px',
-                cursor: isToday ? 'not-allowed' : 'pointer',
+                cursor: isToday && viewMode === 'day' ? 'not-allowed' : 'pointer',
                 color: '#1f2937',
                 marginLeft: '6px',
-                opacity: isToday ? 0.5 : 1,
+                opacity: isToday && viewMode === 'day' ? 0.5 : 1,
               }}
             >今日</button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0', marginLeft: '8px' }}>
+            {(['day', 'week', 'month', 'year'] as const).map((m, i) => {
+              const active = viewMode === m;
+              const label = m === 'day' ? '日' : m === 'week' ? '週' : m === 'month' ? '月' : '年';
+              return (
+                <button
+                  key={m}
+                  onClick={() => navigateToDate(currentDate, m)}
+                  style={{
+                    background: active ? '#1f2937' : 'white',
+                    color: active ? 'white' : '#374151',
+                    border: '1px solid #d1d5db',
+                    borderLeftWidth: i === 0 ? 1 : 0,
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    borderRadius: i === 0 ? '4px 0 0 4px' : i === 3 ? '0 4px 4px 0' : '0',
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >{label}</button>
+              );
+            })}
           </div>
           <div style={{ flex: 1 }} />
           {error !== null && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
@@ -371,210 +307,51 @@ export function App() {
           >📊</button>
         </header>
 
-        {(() => {
-          const dailyAgg = aggregateDaily(blocksByDate, currentDate);
-          const dailyAssignedMin = Array.from(dailyAgg.byProject.values()).reduce((a, b) => a + b, 0);
-          const dailyTotalMin = dailyAssignedMin + dailyAgg.unassigned;
-          const projectEntries = projects
-            .map((p) => ({ p, min: dailyAgg.byProject.get(p.id) ?? 0 }))
-            .filter(({ min }) => min > 0);
-          const isEmpty = projectEntries.length === 0 && dailyAgg.unassigned === 0;
-          return (
-            <div style={{
-              padding: '6px 16px',
-              borderBottom: '1px solid #e5e7eb',
-              background: '#f9fafb',
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '14px',
-              overflow: 'auto',
-              flexShrink: 0,
-            }}>
-              <span style={{ color: '#6b7280', fontSize: '11px', flexShrink: 0, fontWeight: 600 }}>実績</span>
-              {isEmpty ? (
-                <span style={{ color: '#9ca3af', fontSize: '11px' }}>本日の登録なし</span>
-              ) : (
-                <>
-                  {projectEntries.map(({ p, min }) => (
-                    <span key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} />
-                      <span style={{ color: '#374151' }}>{p.name}: {(min / 60).toFixed(1)}h</span>
-                    </span>
-                  ))}
-                  {dailyAgg.unassigned > 0 && (
-                    <span style={{ color: '#6b7280', flexShrink: 0 }}>未割当: {(dailyAgg.unassigned / 60).toFixed(1)}h</span>
-                  )}
-                </>
-              )}
-              <span style={{ marginLeft: 'auto', color: '#1f2937', fontWeight: 600, flexShrink: 0 }}>
-                合計: {(dailyTotalMin / 60).toFixed(1)}h
-              </span>
-            </div>
-          );
-        })()}
-
-        <div
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          style={{ flex: 1, overflow: 'auto', position: 'relative', background: '#fafafa' }}
-        >
-          <div style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}>
-            {Array.from({ length: 48 }).map((_, i) => {
-              const minute = i * 30;
-              return (
-                <div
-                  key={`slot-${i}`}
-                  onDoubleClick={() => handleCreateAt(minute)}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.08)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                  style={{
-                    position: 'absolute',
-                    top: `${minute * PX_PER_MIN}px`,
-                    left: 0,
-                    right: 0,
-                    height: `${30 * PX_PER_MIN}px`,
-                    background: 'transparent',
-                    transition: 'background 80ms',
-                  }}
-                />
-              );
-            })}
-
-            {Array.from({ length: 25 }).map((_, h) => (
-              <div key={h} style={{
-                position: 'absolute',
-                top: `${h * 60 * PX_PER_MIN}px`,
-                left: '-52px',
-                right: 0,
-                borderTop: '1px solid #e5e7eb',
-                pointerEvents: 'none',
-              }}>
-                <span style={{ position: 'absolute', top: '-8px', left: '8px', fontSize: '11px', color: '#9ca3af', background: '#fafafa', padding: '0 2px' }}>
-                  {pad2(h)}:00
-                </span>
-              </div>
-            ))}
-
-            {blocks.map((b) => {
-              const color = blockColor(b);
-              const proj = b.projectId !== undefined ? projectById.get(b.projectId) : undefined;
-              const isEditing = editingId === b.id;
-              return (
-                <div
-                  key={b.id}
-                  draggable={!isEditing}
-                  onDragStart={(e) => handleBlockDragStart(e, b.id)}
-                  style={{
-                    position: 'absolute',
-                    top: `${b.start * PX_PER_MIN}px`,
-                    left: '6px',
-                    right: '14px',
-                    height: `${b.durationMin * PX_PER_MIN}px`,
-                    background: color,
-                    color: 'white',
-                    borderRadius: '5px',
-                    padding: '4px 8px',
-                    fontSize: '12px',
-                    overflow: 'hidden',
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-                    cursor: isEditing ? 'text' : 'grab',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '4px' }}>
-                    {isEditing ? (
-                      <>
-                        <input
-                          autoFocus
-                          value={editLabel}
-                          onChange={(e) => setEditLabel(e.target.value)}
-                          onFocus={(e) => e.currentTarget.select()}
-                          draggable={false}
-                          onBlur={(e) => {
-                            const next = e.relatedTarget;
-                            const blockEl = e.currentTarget.parentElement?.parentElement;
-                            if (next instanceof Node && blockEl && blockEl.contains(next)) return;
-                            commitEdit(b.id, editLabel);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.currentTarget.blur();
-                            } else if (e.key === 'Escape') {
-                              setEditingId(null);
-                            }
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          style={{
-                            flex: 1,
-                            minWidth: 0,
-                            background: 'rgba(255,255,255,0.18)',
-                            border: '1px solid rgba(255,255,255,0.55)',
-                            color: 'white',
-                            fontSize: '12px',
-                            padding: '1px 4px',
-                            borderRadius: '3px',
-                            outline: 'none',
-                          }}
-                        />
-                        <select
-                          value={b.projectId ?? ''}
-                          onChange={(e) => handleProjectChange(b.id, e.currentTarget.value)}
-                          onBlur={(e) => {
-                            const next = e.relatedTarget;
-                            const blockEl = e.currentTarget.parentElement?.parentElement;
-                            if (next instanceof Node && blockEl && blockEl.contains(next)) return;
-                            commitEdit(b.id, editLabel);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          onMouseDown={(e) => e.stopPropagation()}
-                          style={{
-                            maxWidth: '110px',
-                            background: 'rgba(255,255,255,0.18)',
-                            border: '1px solid rgba(255,255,255,0.55)',
-                            color: 'white',
-                            fontSize: '11px',
-                            padding: '1px 2px',
-                            borderRadius: '3px',
-                            outline: 'none',
-                          }}
-                        >
-                          <option value="" style={{ color: '#1f2937' }}>— 未割当 —</option>
-                          {projects.map((p) => (
-                            <option key={p.id} value={p.id} style={{ color: '#1f2937' }}>{p.name}</option>
-                          ))}
-                        </select>
-                      </>
-                    ) : (
-                      <span
-                        onClick={(e) => { e.stopPropagation(); beginEdit(b); }}
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          cursor: 'text',
-                          flex: 1,
-                        }}
-                      >
-                        {b.label}
-                      </span>
-                    )}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleRemove(b.id); }}
-                      style={{ background: 'rgba(0,0,0,0.25)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px', padding: '0 6px', lineHeight: 1.4 }}
-                      aria-label="削除"
-                    >×</button>
-                  </div>
-                  {b.durationMin >= 25 && !isEditing && (
-                    <div style={{ fontSize: '10px', opacity: 0.85, marginTop: '2px' }}>
-                      {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
-                      {proj !== undefined && <span> · {proj.name}</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        {viewMode === 'day' && (
+          <DayView
+            currentDate={currentDate}
+            blocks={blocks}
+            setBlocks={setBlocks}
+            blocksByDate={blocksByDate}
+            projects={projects}
+            projectById={projectById}
+            templateById={templateById}
+            setError={setError}
+            editingId={editingId}
+            setEditingId={setEditingId}
+            editLabel={editLabel}
+            setEditLabel={setEditLabel}
+            commitEdit={commitEdit}
+            beginEdit={beginEdit}
+            handleProjectChange={handleProjectChange}
+          />
+        )}
+        {viewMode === 'week' && (
+          <WeekView
+            currentDate={currentDate}
+            blocksByDate={blocksByDate}
+            projectById={projectById}
+            onDayClick={(d) => navigateToDate(d, 'day')}
+          />
+        )}
+        {viewMode === 'month' && (
+          <MonthView
+            currentDate={currentDate}
+            blocksByDate={blocksByDate}
+            projects={projects}
+            projectById={projectById}
+            onDayClick={(d) => navigateToDate(d, 'day')}
+          />
+        )}
+        {viewMode === 'year' && (
+          <YearView
+            currentDate={currentDate}
+            blocksByDate={blocksByDate}
+            projects={projects}
+            projectById={projectById}
+            onMonthClick={(ym) => navigateToDate(`${ym}-01`, 'month')}
+          />
+        )}
       </main>
 
       {showSettings && (
@@ -768,25 +545,13 @@ export function App() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                       {projects.map((p) => {
                         const minutes = aggregate.byProject.get(p.id) ?? 0;
-                        const actualH = minutes / 60;
-                        const actualPM = actualH / HOURS_PER_PERSON_MONTH;
+                        const u = projectBudgetUsage(p, minutes, elapsed);
                         const budgetPM = p.monthlyBudget;
-                        const budgetH = budgetPM !== undefined ? budgetPM * HOURS_PER_PERSON_MONTH : undefined;
-                        const toleranceH = budgetPM !== undefined ? budgetPM * TOLERANCE_HOURS_PER_PM : 0;
-                        const lowH = budgetH !== undefined ? Math.max(0, budgetH - toleranceH) : undefined;
-                        const highH = budgetH !== undefined ? budgetH + toleranceH : undefined;
-                        const ratio = budgetH !== undefined && budgetH > 0 ? actualH / budgetH : 0;
-                        const barFraction = highH !== undefined && highH > 0 ? Math.min(1, actualH / highH) : 0;
-                        const isOver = highH !== undefined && actualH > highH;
-                        const isUnderConfirmed = lowH !== undefined && elapsed >= 1 && actualH < lowH;
-                        const projection = elapsed >= PROJECTION_MIN_ELAPSED ? actualH / elapsed : null;
-                        const isProjectedOver = !isOver && highH !== undefined && projection !== null && projection > highH;
-                        const isProjectedUnder = !isUnderConfirmed && lowH !== undefined && projection !== null && projection < lowH && elapsed < 1;
-                        const barColor = isOver
+                        const barColor = u.status === 'over'
                           ? '#dc2626'
-                          : isProjectedOver
+                          : u.status === 'projectedOver'
                             ? '#f97316'
-                            : (isProjectedUnder || isUnderConfirmed)
+                            : (u.status === 'projectedUnder' || u.status === 'underConfirmed')
                               ? '#f59e0b'
                               : p.color;
                         return (
@@ -795,45 +560,45 @@ export function App() {
                               <span style={{ width: 10, height: 10, borderRadius: 2, background: p.color, flexShrink: 0 }} />
                               <span style={{ fontSize: '13px', flex: 1 }}>{p.name}</span>
                               <span style={{ fontSize: '12px', color: '#374151' }}>
-                                {actualPM.toFixed(2)}人月 ({actualH.toFixed(1)}h)
+                                {u.actualPM.toFixed(2)}人月 ({u.actualH.toFixed(1)}h)
                                 {budgetPM !== undefined && (
-                                  <span style={{ color: '#6b7280' }}> / {budgetPM}人月 ({Math.round(ratio * 100)}%)</span>
+                                  <span style={{ color: '#6b7280' }}> / {budgetPM}人月 ({Math.round(u.ratio * 100)}%)</span>
                                 )}
                               </span>
                             </div>
-                            {budgetH !== undefined && (
+                            {u.budgetH !== null && (
                               <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
                                 <div style={{
-                                  width: `${barFraction * 100}%`,
+                                  width: `${u.barFraction * 100}%`,
                                   height: '100%',
                                   background: barColor,
                                   transition: 'width 200ms',
                                 }} />
                               </div>
                             )}
-                            {budgetH !== undefined && lowH !== undefined && highH !== undefined && (
+                            {u.budgetH !== null && u.lowH !== null && u.highH !== null && (
                               <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px' }}>
-                                許容 {fmtH(lowH)}h–{fmtH(highH)}h（±{fmtH(toleranceH)}h）
+                                許容 {fmtH(u.lowH)}h–{fmtH(u.highH)}h（±{fmtH(u.toleranceH)}h）
                               </div>
                             )}
-                            {isOver && highH !== undefined && (
+                            {u.status === 'over' && u.highH !== null && (
                               <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '2px' }}>
-                                ⚠ 超過 ({(actualH - highH).toFixed(1)}h オーバー)
+                                ⚠ 超過 ({(u.actualH - u.highH).toFixed(1)}h オーバー)
                               </div>
                             )}
-                            {isUnderConfirmed && lowH !== undefined && (
+                            {u.status === 'underConfirmed' && u.lowH !== null && (
                               <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
-                                ⚠ 不足 ({(lowH - actualH).toFixed(1)}h 不足、月末確定)
+                                ⚠ 不足 ({(u.lowH - u.actualH).toFixed(1)}h 不足、月末確定)
                               </div>
                             )}
-                            {isProjectedOver && projection !== null && (
+                            {u.status === 'projectedOver' && u.projection !== null && (
                               <div style={{ fontSize: '11px', color: '#f97316', marginTop: '2px' }}>
-                                ⚠ このままだと月末予測 {projection.toFixed(1)}h（許容を超過する見込み）
+                                ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容を超過する見込み）
                               </div>
                             )}
-                            {isProjectedUnder && projection !== null && (
+                            {u.status === 'projectedUnder' && u.projection !== null && (
                               <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
-                                ⚠ このままだと月末予測 {projection.toFixed(1)}h（許容に届かない見込み）
+                                ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容に届かない見込み）
                               </div>
                             )}
                           </div>

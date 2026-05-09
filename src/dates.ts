@@ -52,3 +52,39 @@ export const elapsedRatio = (yearMonth: string, todayDate: DateString = today())
   const dayOfMonth = parseInt(todayDate.slice(8, 10), 10);
   return Math.max(0, Math.min(1, dayOfMonth / daysInMonth(yearMonth)));
 };
+
+export const weekStart = (s: DateString): DateString => {
+  const d = parseDate(s);
+  const offset = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - offset);
+  return formatDate(d);
+};
+
+export const daysOfWeek = (s: DateString): readonly DateString[] => {
+  const start = weekStart(s);
+  return Array.from({ length: 7 }, (_, i) => addDays(start, i));
+};
+
+export const daysOfMonthGrid = (yearMonth: string): readonly DateString[] => {
+  const firstDay = `${yearMonth}-01`;
+  const start = weekStart(firstDay);
+  return Array.from({ length: 42 }, (_, i) => addDays(start, i));
+};
+
+export const monthsOfYear = (year: string): readonly string[] => {
+  return Array.from({ length: 12 }, (_, i) => `${year}-${pad2(i + 1)}`);
+};
+
+export const addMonths = (s: DateString, n: number): DateString => {
+  const d = parseDate(s);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
+  return formatDate(d);
+};
+
+export const yearOf = (s: DateString): string => s.slice(0, 4);
+
+export const formatJaYear = (year: string): string => `${year}年`;
