@@ -25,6 +25,15 @@ export type TimeBlock = {
   readonly durationMin: number;
   readonly templateId?: string;
   readonly projectId?: string;
+  readonly source?: 'gcal';
+  readonly gcalKey?: string; // assignments の lookup キー (単発は eventId、繰り返しは parent recurringEventId)
+  readonly gcalRecurring?: true;
+};
+
+export type GcalAssignment = {
+  readonly projectId?: string;
+  readonly hidden?: true;
+  readonly summary?: string; // 非表示中復元 UI で表示するため、最後に見た summary を保持
 };
 
 export type PlaceResult =

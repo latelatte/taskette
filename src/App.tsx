@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
-import type { DateString, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { DateString, GcalAssignment, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { Day } from './domain/day.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
 import { addDays, addMonths, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
@@ -11,6 +11,12 @@ import { YearView } from './views/YearView.js';
 import { loadStore, saveStore } from './storage.js';
 import { aggregateMonthly } from './domain/aggregate.js';
 import { effectiveBudgetPM, projectBudgetUsage } from './domain/budget.js';
+import { useGcalAuth } from './gcal/useGcalAuth.js';
+import { useGcalSync } from './gcal/useGcalSync.js';
+import { useGcalCalendarList } from './gcal/useGcalCalendarList.js';
+import { mergeDayBlocks } from './gcal/merge.js';
+
+const SELECTED_CALENDAR_KEY = 'taskette/gcal-calendar-id';
 
 const fmtH = (h: number): string => {
   const r = Math.round(h * 10) / 10;
@@ -36,9 +42,19 @@ type BlockEditState = {
   readonly startHHMM: string;
   readonly durationMin: string;
   readonly projectId: string;
+  readonly source: 'native' | 'gcal';
+  readonly gcalKey?: string;
+  readonly gcalRecurring?: true;
 };
 
-type SettingsView = 'menu' | 'projects' | 'templates';
+type SettingsView = 'menu' | 'projects' | 'templates' | 'gcal';
+
+const SETTINGS_TITLES: Record<SettingsView, string> = {
+  menu: '設定',
+  projects: '案件設定',
+  templates: 'テンプレート設定',
+  gcal: 'Google Calendar 連携',
+};
 
 const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   id: b.id,
@@ -78,6 +94,9 @@ export function App() {
   );
   const [projects, setProjects] = useState<readonly Project[]>(() => loadStore().projects);
   const [templates, setTemplates] = useState<readonly TaskTemplate[]>(() => loadStore().templates);
+  const [gcalAssignments, setGcalAssignments] = useState<Record<string, GcalAssignment>>(() => loadStore().gcalAssignments);
+  const [gcalSummaryRules, setGcalSummaryRules] = useState<Record<string, { projectId?: string; hidden?: true }>>(() => loadStore().gcalSummaryRules);
+  const [editApplyToAllSameSummary, setEditApplyToAllSameSummary] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockEdit, setBlockEdit] = useState<BlockEditState | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -100,11 +119,42 @@ export function App() {
   const [editingMonthBudgetProjectId, setEditingMonthBudgetProjectId] = useState<string | null>(null);
   const [editingMonthBudgetValue, setEditingMonthBudgetValue] = useState('');
 
-  useEffect(() => {
-    saveStore({ blocksByDate, projects, templates });
-  }, [blocksByDate, projects, templates]);
+  const gcalAuth = useGcalAuth();
+  const gcalCalendars = useGcalCalendarList(gcalAuth.accessToken);
+  const [selectedCalendarId, setSelectedCalendarIdState] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(SELECTED_CALENDAR_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const setSelectedCalendarId = (id: string | null): void => {
+    setSelectedCalendarIdState(id);
+    try {
+      if (id === null || id.length === 0) localStorage.removeItem(SELECTED_CALENDAR_KEY);
+      else localStorage.setItem(SELECTED_CALENDAR_KEY, id);
+    } catch {
+      // ignore
+    }
+  };
+  const gcalSync = useGcalSync(gcalAuth.accessToken, currentDate, selectedCalendarId, gcalAssignments, gcalSummaryRules, gcalAuth.requestSilentRefresh);
 
-  const blocks: readonly TimeBlock[] = blocksByDate[currentDate] ?? [];
+  const mergedBlocksByDate = useMemo<Record<DateString, readonly TimeBlock[]>>(() => {
+    const gcalBlocksByDate = gcalSync.blocksByDate;
+    if (Object.keys(gcalBlocksByDate).length === 0) return blocksByDate;
+    const out: Record<DateString, readonly TimeBlock[]> = { ...blocksByDate };
+    for (const [date, gBlocks] of Object.entries(gcalBlocksByDate)) {
+      const native = blocksByDate[date] ?? [];
+      out[date] = mergeDayBlocks(native, gBlocks);
+    }
+    return out;
+  }, [blocksByDate, gcalSync.blocksByDate]);
+
+  useEffect(() => {
+    saveStore({ blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules });
+  }, [blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
+
+  const blocks: readonly TimeBlock[] = mergedBlocksByDate[currentDate] ?? [];
 
   const setBlocks = (
     action: readonly TimeBlock[] | ((prev: readonly TimeBlock[]) => readonly TimeBlock[]),
@@ -112,7 +162,8 @@ export function App() {
     setBlocksByDate((prev) => {
       const cur = prev[currentDate] ?? [];
       const updated = typeof action === 'function' ? action(cur) : action;
-      return { ...prev, [currentDate]: updated };
+      const native = updated.filter((b) => b.source !== 'gcal');
+      return { ...prev, [currentDate]: native };
     });
   };
 
@@ -135,12 +186,19 @@ export function App() {
   };
 
   const openBlockEdit = (block: TimeBlock): void => {
+    const isGcal = block.source === 'gcal';
+    // GCal block を開いた時、個別 assignment が既にある場合のみ OFF (個別設定を維持)、それ以外はデフォルト ON
+    const hasIndividualAssignment = isGcal && block.gcalKey !== undefined && gcalAssignments[block.gcalKey] !== undefined;
+    setEditApplyToAllSameSummary(isGcal && !hasIndividualAssignment);
     setBlockEdit({
       blockId: block.id,
       label: block.label,
       startHHMM: formatHHMM(block.start),
       durationMin: String(block.durationMin),
       projectId: block.projectId ?? '',
+      source: isGcal ? 'gcal' : 'native',
+      ...(block.gcalKey !== undefined ? { gcalKey: block.gcalKey } : {}),
+      ...(block.gcalRecurring === true ? { gcalRecurring: true as const } : {}),
     });
   };
 
@@ -151,6 +209,54 @@ export function App() {
 
   const saveBlockEdit = (): void => {
     if (blockEdit === null) return;
+    // GCal 由来は projectId のみ更新 (時間/ラベル変更不可)
+    if (blockEdit.source === 'gcal' && blockEdit.gcalKey !== undefined) {
+      const key = blockEdit.gcalKey;
+      const summary = blockEdit.label;
+      const projectId = blockEdit.projectId;
+
+      if (editApplyToAllSameSummary) {
+        // 「同名すべて」モード: summary rule を更新、個別 assignment は重複防止のため削除
+        setGcalSummaryRules((prev) => {
+          if (projectId === '') {
+            // projectId 未割当なら summary rule を解除
+            const { [summary]: _, ...rest } = prev;
+            return rest;
+          }
+          return { ...prev, [summary]: { projectId } };
+        });
+        setGcalAssignments((prev) => {
+          if (prev[key] === undefined) return prev;
+          const cur = prev[key]!;
+          // hidden だけ保持、projectId/summary は summary rule に委譲
+          if (cur.hidden === true) {
+            return { ...prev, [key]: { hidden: true as const, summary } };
+          }
+          const { [key]: _, ...rest } = prev;
+          return rest;
+        });
+      } else {
+        // 「この予定のみ」モード: 個別 assignment を更新
+        setGcalAssignments((prev) => {
+          const cur = prev[key] ?? {};
+          const next: GcalAssignment = {
+            ...(projectId !== '' ? { projectId } : {}),
+            ...(cur.hidden === true ? { hidden: true as const } : {}),
+            ...(summary !== '' ? { summary } : {}),
+          };
+          if (next.projectId === undefined && next.hidden !== true && next.summary === undefined) {
+            const { [key]: _, ...rest } = prev;
+            return rest;
+          }
+          return { ...prev, [key]: next };
+        });
+      }
+
+      setError(null);
+      setBlockEdit(null);
+      return;
+    }
+
     const trimmedLabel = blockEdit.label.trim();
     if (trimmedLabel.length === 0) {
       setError('ラベルを入力してくださいまし');
@@ -208,6 +314,55 @@ export function App() {
     setBlocks((prev) => prev.filter((b) => b.id !== blockEdit.blockId));
     setError(null);
     setBlockEdit(null);
+  };
+
+  const hideGcalFromEdit = (): void => {
+    if (blockEdit === null || blockEdit.source !== 'gcal' || blockEdit.gcalKey === undefined) return;
+    const key = blockEdit.gcalKey;
+    const summary = blockEdit.label;
+
+    if (editApplyToAllSameSummary) {
+      // 同名予定すべてを非表示
+      setGcalSummaryRules((prev) => ({ ...prev, [summary]: { hidden: true as const } }));
+      // 個別 assignment は重複防止のため削除
+      setGcalAssignments((prev) => {
+        if (prev[key] === undefined) return prev;
+        const { [key]: _, ...rest } = prev;
+        return rest;
+      });
+    } else {
+      setGcalAssignments((prev) => {
+        const cur = prev[key] ?? {};
+        return {
+          ...prev,
+          [key]: {
+            ...(cur.projectId !== undefined ? { projectId: cur.projectId } : {}),
+            hidden: true as const,
+            summary,
+          },
+        };
+      });
+    }
+
+    setError(null);
+    setBlockEdit(null);
+  };
+
+  const restoreGcalAssignment = (key: string): void => {
+    setGcalAssignments((prev) => {
+      const cur = prev[key];
+      if (cur === undefined) return prev;
+      const next: GcalAssignment = {
+        ...(cur.projectId !== undefined ? { projectId: cur.projectId } : {}),
+        ...(cur.summary !== undefined ? { summary: cur.summary } : {}),
+        // hidden を取り除く
+      };
+      if (next.projectId === undefined && next.summary === undefined) {
+        const { [key]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [key]: next };
+    });
   };
 
   const submitNewProject = (): void => {
@@ -538,7 +693,7 @@ export function App() {
             currentDate={currentDate}
             blocks={blocks}
             setBlocks={setBlocks}
-            blocksByDate={blocksByDate}
+            blocksByDate={mergedBlocksByDate}
             projects={projects}
             projectById={projectById}
             templateById={templateById}
@@ -549,7 +704,7 @@ export function App() {
         {viewMode === 'week' && (
           <WeekView
             currentDate={currentDate}
-            blocksByDate={blocksByDate}
+            blocksByDate={mergedBlocksByDate}
             projectById={projectById}
             onDayClick={(d) => navigateToDate(d, 'day')}
           />
@@ -557,7 +712,7 @@ export function App() {
         {viewMode === 'month' && (
           <MonthView
             currentDate={currentDate}
-            blocksByDate={blocksByDate}
+            blocksByDate={mergedBlocksByDate}
             projects={projects}
             projectById={projectById}
             onDayClick={(d) => navigateToDate(d, 'day')}
@@ -566,7 +721,7 @@ export function App() {
         {viewMode === 'year' && (
           <YearView
             currentDate={currentDate}
-            blocksByDate={blocksByDate}
+            blocksByDate={mergedBlocksByDate}
             projects={projects}
             projectById={projectById}
             onMonthClick={(ym) => navigateToDate(`${ym}-01`, 'month')}
@@ -611,7 +766,7 @@ export function App() {
                   >←</button>
                 )}
                 <h2 style={{ margin: 0, fontSize: '15px' }}>
-                  {settingsView === 'menu' ? '設定' : settingsView === 'projects' ? '案件設定' : 'テンプレート設定'}
+                  {SETTINGS_TITLES[settingsView]}
                 </h2>
               </div>
               <button
@@ -626,6 +781,7 @@ export function App() {
                 {[
                   { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
                   { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
+                  { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
                 ].map((item) => (
                   <button
                     key={item.key}
@@ -985,6 +1141,289 @@ export function App() {
               >追加</button>
             </div>
             </>)}
+
+            {settingsView === 'gcal' && (
+              <div>
+                <div style={{ fontSize: '12px', color: '#4b5563', lineHeight: 1.6, marginBottom: '14px' }}>
+                  Google Calendar の予定を読み取り専用で取り込みます。<br/>
+                  打ち合わせ等の予定に案件を割り当てて、工数集計に含められます。
+                </div>
+
+                {gcalAuth.status === 'unconfigured' && (
+                  <div style={{
+                    padding: '12px 14px',
+                    background: '#fef3c7',
+                    border: '1px solid #fcd34d',
+                    borderRadius: 6,
+                    fontSize: '12px',
+                    color: '#78350f',
+                    lineHeight: 1.6,
+                  }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Client ID が未設定です</div>
+                    <div>
+                      Google Cloud Console で OAuth 2.0 クライアント ID を発行し、<br/>
+                      プロジェクトルートに <code style={{ background: 'white', padding: '1px 5px', borderRadius: 3 }}>.env.local</code> を作成して下記を記述してください:
+                    </div>
+                    <pre style={{
+                      marginTop: 8,
+                      padding: '8px 10px',
+                      background: 'white',
+                      border: '1px solid #fcd34d',
+                      borderRadius: 4,
+                      fontSize: 11,
+                      overflowX: 'auto',
+                    }}>VITE_GOOGLE_CLIENT_ID=xxxxxxx.apps.googleusercontent.com</pre>
+                    <div style={{ marginTop: 6, fontSize: 11 }}>
+                      設定後 dev サーバを再起動してください。
+                    </div>
+                  </div>
+                )}
+
+                {gcalAuth.status !== 'unconfigured' && (
+                  <div style={{
+                    padding: '12px 14px',
+                    background: '#f9fafb',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 6,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          background:
+                            gcalAuth.status === 'connected' ? '#22c55e'
+                            : gcalAuth.status === 'connecting' ? '#f59e0b'
+                            : gcalAuth.status === 'error' ? '#ef4444'
+                            : gcalAuth.status === 'loading' ? '#9ca3af'
+                            : '#cbd5e1',
+                        }} />
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#1f2937' }}>
+                          {gcalAuth.status === 'connected' && '接続済み'}
+                          {gcalAuth.status === 'connecting' && '接続中…'}
+                          {gcalAuth.status === 'disconnected' && '未接続'}
+                          {gcalAuth.status === 'loading' && '読み込み中…'}
+                          {gcalAuth.status === 'error' && 'エラー'}
+                        </div>
+                      </div>
+                      {gcalAuth.status === 'connected' ? (
+                        <button
+                          onClick={gcalAuth.disconnect}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: 4,
+                            background: '#fee2e2',
+                            color: '#dc2626',
+                            border: 'none',
+                            fontSize: 12,
+                            cursor: 'pointer',
+                          }}
+                        >切断</button>
+                      ) : (
+                        <button
+                          onClick={gcalAuth.connect}
+                          disabled={gcalAuth.status === 'loading' || gcalAuth.status === 'connecting'}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: 4,
+                            background: '#3b82f6',
+                            color: 'white',
+                            border: 'none',
+                            fontSize: 12,
+                            cursor: gcalAuth.status === 'loading' || gcalAuth.status === 'connecting' ? 'not-allowed' : 'pointer',
+                            opacity: gcalAuth.status === 'loading' || gcalAuth.status === 'connecting' ? 0.5 : 1,
+                          }}
+                        >Google で接続</button>
+                      )}
+                    </div>
+
+                    {gcalAuth.errorMessage !== null && (
+                      <div style={{ marginTop: 10, fontSize: 11, color: '#b91c1c' }}>
+                        {gcalAuth.errorMessage}
+                      </div>
+                    )}
+
+                    {gcalAuth.status === 'connected' && (
+                      <>
+                        <div style={{ marginTop: 10, fontSize: 11, color: '#6b7280', lineHeight: 1.6 }}>
+                          スコープ: 読み取り専用 (calendar.readonly)<br/>
+                          アクセストークンはメモリ保持。リロード後は popup なしで自動再接続を試みます (Google 側の session 切れ時のみ手動接続が必要)。
+                        </div>
+
+                        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+                            同期するカレンダー
+                          </div>
+                          {gcalCalendars.status === 'loading' && (
+                            <div style={{ fontSize: 11, color: '#9ca3af' }}>カレンダー一覧を読み込み中…</div>
+                          )}
+                          {gcalCalendars.status === 'error' && (
+                            <div style={{ fontSize: 11, color: '#b91c1c' }}>
+                              カレンダー一覧取得エラー: {gcalCalendars.errorMessage}
+                            </div>
+                          )}
+                          {gcalCalendars.status === 'loaded' && (
+                            <>
+                              <select
+                                value={selectedCalendarId ?? ''}
+                                onChange={(e) => setSelectedCalendarId(e.currentTarget.value === '' ? null : e.currentTarget.value)}
+                                style={{
+                                  width: '100%',
+                                  padding: '6px 8px',
+                                  fontSize: 12,
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: 4,
+                                  background: 'white',
+                                  color: '#1f2937',
+                                }}
+                              >
+                                <option value="">— 同期するカレンダーを選択 —</option>
+                                {gcalCalendars.calendars.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.isPrimary ? '★ ' : ''}{c.displayName}
+                                  </option>
+                                ))}
+                              </select>
+                              {selectedCalendarId !== null && !gcalCalendars.calendars.some((c) => c.id === selectedCalendarId) && (
+                                <div style={{ marginTop: 6, fontSize: 11, color: '#b45309' }}>
+                                  ⚠ 前回選択していたカレンダーが見つかりません。再選択してください。
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                            <div style={{ fontSize: 12, color: '#374151' }}>
+                              {gcalSync.status === 'syncing' && '同期中…'}
+                              {gcalSync.status === 'idle' && gcalSync.lastSyncedAt !== null && (
+                                <>最終同期: {new Date(gcalSync.lastSyncedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</>
+                              )}
+                              {gcalSync.status === 'idle' && gcalSync.lastSyncedAt === null && '未同期'}
+                              {gcalSync.status === 'error' && (
+                                <span style={{ color: '#b91c1c' }}>同期エラー</span>
+                              )}
+                            </div>
+                            <button
+                              onClick={gcalSync.refresh}
+                              disabled={gcalSync.status === 'syncing'}
+                              style={{
+                                padding: '4px 10px',
+                                fontSize: 11,
+                                background: 'white',
+                                color: '#1f2937',
+                                border: '1px solid #d1d5db',
+                                borderRadius: 4,
+                                cursor: gcalSync.status === 'syncing' ? 'not-allowed' : 'pointer',
+                                opacity: gcalSync.status === 'syncing' ? 0.5 : 1,
+                              }}
+                            >再同期</button>
+                          </div>
+                          {gcalSync.status === 'error' && (
+                            <div style={{ marginTop: 8, padding: '8px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 4, fontSize: 11, color: '#991b1b', lineHeight: 1.5 }}>
+                              {gcalSync.errorStatus === 401 || gcalSync.errorStatus === 403 ? (
+                                <>
+                                  <div style={{ fontWeight: 600 }}>セッションが切れています</div>
+                                  <div>自動再接続が失敗しました。下の「Google で接続」ボタンを押して再認証してください。</div>
+                                </>
+                              ) : gcalSync.errorStatus === 429 ? (
+                                <>
+                                  <div style={{ fontWeight: 600 }}>API リクエスト制限</div>
+                                  <div>しばらく待ってから再同期ボタンを押してくださいまし。</div>
+                                </>
+                              ) : gcalSync.errorStatus !== null && gcalSync.errorStatus >= 500 ? (
+                                <>
+                                  <div style={{ fontWeight: 600 }}>Google 側のサーバエラー</div>
+                                  <div>少し時間を置いて再同期してください ({gcalSync.errorStatus})</div>
+                                </>
+                              ) : (
+                                <>
+                                  <div style={{ fontWeight: 600 }}>同期エラー</div>
+                                  <div>{gcalSync.errorMessage ?? 'ネットワーク接続をご確認くださいまし'}</div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          <div style={{ marginTop: 6, fontSize: 11, color: '#9ca3af', lineHeight: 1.5 }}>
+                            {selectedCalendarId === null
+                              ? '※ カレンダーを選択すると表示中月 ±1ヶ月の予定を取得します'
+                              : '選択カレンダーの表示中月 ±1ヶ月を取得しています'}
+                          </div>
+                        </div>
+
+                        {(() => {
+                          const hidden = Object.entries(gcalAssignments).filter(([, a]) => a.hidden === true);
+                          if (hidden.length === 0) return null;
+                          return (
+                            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+                                非表示中のイベント ({hidden.length})
+                              </div>
+                              <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {hidden.map(([key, a]) => (
+                                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', background: '#f9fafb', borderRadius: 4, fontSize: 11 }}>
+                                    <span style={{ flex: 1, color: '#4b5563', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {a.summary ?? '(タイトル不明)'}
+                                    </span>
+                                    <button
+                                      onClick={() => restoreGcalAssignment(key)}
+                                      style={{ background: 'white', color: '#2563eb', border: '1px solid #d1d5db', borderRadius: 3, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}
+                                    >再表示</button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {(() => {
+                          const rules = Object.entries(gcalSummaryRules);
+                          if (rules.length === 0) return null;
+                          return (
+                            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #e5e7eb' }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
+                                同名予定ルール ({rules.length})
+                              </div>
+                              <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {rules.map(([summary, r]) => {
+                                  const proj = r.projectId !== undefined ? projectById.get(r.projectId) : undefined;
+                                  return (
+                                    <div key={summary} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', background: '#f9fafb', borderRadius: 4, fontSize: 11 }}>
+                                      <span style={{ flex: 1, color: '#4b5563', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {summary}
+                                      </span>
+                                      <span style={{
+                                        fontSize: 10,
+                                        padding: '1px 6px',
+                                        borderRadius: 3,
+                                        background: r.hidden === true ? '#fef3c7' : (proj?.color ?? '#e5e7eb'),
+                                        color: r.hidden === true ? '#92400e' : 'white',
+                                        whiteSpace: 'nowrap',
+                                      }}>
+                                        {r.hidden === true ? '非表示' : (proj?.name ?? '未割当')}
+                                      </span>
+                                      <button
+                                        onClick={() => setGcalSummaryRules((prev) => {
+                                          const { [summary]: _, ...rest } = prev;
+                                          return rest;
+                                        })}
+                                        style={{ background: 'white', color: '#dc2626', border: '1px solid #d1d5db', borderRadius: 3, padding: '2px 8px', fontSize: 11, cursor: 'pointer' }}
+                                      >削除</button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1017,7 +1456,7 @@ export function App() {
           >
             {(() => {
               const ym = yearMonthOf(currentDate);
-              const aggregate = aggregateMonthly(blocksByDate, ym);
+              const aggregate = aggregateMonthly(mergedBlocksByDate, ym);
               const elapsed = elapsedRatio(ym);
               const totalAssignedMin = Array.from(aggregate.byProject.values()).reduce((a, b) => a + b, 0);
               const grandTotalMin = totalAssignedMin + aggregate.unassigned;
@@ -1185,7 +1624,9 @@ export function App() {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '15px' }}>ブロック編集</h2>
+              <h2 style={{ margin: 0, fontSize: '15px' }}>
+                {blockEdit.source === 'gcal' ? '📅 Google Calendar の予定' : 'ブロック編集'}
+              </h2>
               <button
                 onClick={closeBlockEdit}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
@@ -1193,9 +1634,35 @@ export function App() {
               >×</button>
             </div>
 
+            {blockEdit.source === 'gcal' && (() => {
+              const existingRule = gcalSummaryRules[blockEdit.label];
+              const hasIndividual = blockEdit.gcalKey !== undefined && gcalAssignments[blockEdit.gcalKey] !== undefined;
+              return (
+                <div style={{ marginBottom: 12, padding: '8px 10px', background: '#f3f4f6', borderRadius: 4, fontSize: 11, color: '#4b5563', lineHeight: 1.5 }}>
+                  時間とラベルは GCal 側で管理されています。ここでは案件割当のみ可能です。
+                  {blockEdit.gcalRecurring === true && (
+                    <div style={{ marginTop: 4, color: '#1d4ed8' }}>
+                      🔁 繰り返し予定です — 案件割当・非表示はシリーズ全体に適用されます
+                    </div>
+                  )}
+                  {existingRule !== undefined && !hasIndividual && (
+                    <div style={{ marginTop: 4, color: '#7c3aed' }}>
+                      📌 同名予定ルール適用中: {existingRule.hidden === true ? '非表示' : (existingRule.projectId !== undefined ? (projectById.get(existingRule.projectId)?.name ?? '不明案件') : '未割当')}
+                    </div>
+                  )}
+                  {existingRule !== undefined && hasIndividual && (
+                    <div style={{ marginTop: 4, color: '#d97706' }}>
+                      ⚠ 同名ルールはあるが、この予定は個別設定で上書きされています
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>ラベル</label>
             <input
-              autoFocus
+              autoFocus={blockEdit.source !== 'gcal'}
+              disabled={blockEdit.source === 'gcal'}
               value={blockEdit.label}
               onChange={(e) => setBlockEdit({ ...blockEdit, label: e.target.value })}
               onKeyDown={(e) => {
@@ -1204,7 +1671,18 @@ export function App() {
               }}
               onFocus={(e) => e.currentTarget.select()}
               placeholder="ラベル"
-              style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none', marginBottom: '12px' }}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                fontSize: '13px',
+                border: '1px solid #d1d5db',
+                borderRadius: '4px',
+                boxSizing: 'border-box',
+                outline: 'none',
+                marginBottom: '12px',
+                background: blockEdit.source === 'gcal' ? '#f9fafb' : 'white',
+                color: blockEdit.source === 'gcal' ? '#6b7280' : '#1f2937',
+              }}
             />
 
             <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
@@ -1212,10 +1690,16 @@ export function App() {
                 <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>開始</label>
                 <input
                   type="time"
+                  disabled={blockEdit.source === 'gcal'}
                   value={blockEdit.startHHMM}
                   onChange={(e) => setBlockEdit({ ...blockEdit, startHHMM: e.target.value })}
                   step="900"
-                  style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none' }}
+                  style={{
+                    width: '100%', padding: '6px 8px', fontSize: '13px',
+                    border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none',
+                    background: blockEdit.source === 'gcal' ? '#f9fafb' : 'white',
+                    color: blockEdit.source === 'gcal' ? '#6b7280' : '#1f2937',
+                  }}
                 />
               </div>
               <div style={{ flex: 1 }}>
@@ -1225,18 +1709,25 @@ export function App() {
                   min="1"
                   max="1440"
                   step="5"
+                  disabled={blockEdit.source === 'gcal'}
                   value={blockEdit.durationMin}
                   onChange={(e) => setBlockEdit({ ...blockEdit, durationMin: e.target.value })}
-                  style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none' }}
+                  style={{
+                    width: '100%', padding: '6px 8px', fontSize: '13px',
+                    border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none',
+                    background: blockEdit.source === 'gcal' ? '#f9fafb' : 'white',
+                    color: blockEdit.source === 'gcal' ? '#6b7280' : '#1f2937',
+                  }}
                 />
               </div>
             </div>
 
             <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>案件</label>
             <select
+              autoFocus={blockEdit.source === 'gcal'}
               value={blockEdit.projectId}
               onChange={(e) => setBlockEdit({ ...blockEdit, projectId: e.target.value })}
-              style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none', background: 'white', color: '#1f2937', marginBottom: '16px' }}
+              style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none', background: 'white', color: '#1f2937', marginBottom: blockEdit.source === 'gcal' ? '8px' : '16px' }}
             >
               <option value="">— 未割当 —</option>
               {projects.map((p) => (
@@ -1244,11 +1735,30 @@ export function App() {
               ))}
             </select>
 
+            {blockEdit.source === 'gcal' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={editApplyToAllSameSummary}
+                  onChange={(e) => setEditApplyToAllSameSummary(e.currentTarget.checked)}
+                />
+                <span>同名予定 ({blockEdit.label.length > 22 ? `${blockEdit.label.slice(0, 22)}…` : blockEdit.label}) すべてに適用</span>
+              </label>
+            )}
+
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button
-                onClick={deleteBlockFromEdit}
-                style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
-              >削除</button>
+              {blockEdit.source === 'gcal' ? (
+                <button
+                  onClick={hideGcalFromEdit}
+                  title="このイベントを taskette 上で非表示にします (GCal 側は変更されません)"
+                  style={{ background: '#fef3c7', color: '#92400e', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
+                >非表示にする</button>
+              ) : (
+                <button
+                  onClick={deleteBlockFromEdit}
+                  style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
+                >削除</button>
+              )}
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   onClick={closeBlockEdit}

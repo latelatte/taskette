@@ -72,6 +72,8 @@ export function DayView(props: DayViewProps) {
   };
 
   const applyMove = (id: string, newStart: MinuteOfDay): void => {
+    const target = blocks.find((b) => b.id === id);
+    if (target?.source === 'gcal') return;
     const day = new Day(currentDate, blocks);
     const result = day.move(id, newStart);
     if (result.ok) {
@@ -84,11 +86,15 @@ export function DayView(props: DayViewProps) {
     }
   };
 
-  const handleBlockDragStart = (e: DragEvent<HTMLDivElement>, blockId: string): void => {
+  const handleBlockDragStart = (e: DragEvent<HTMLDivElement>, block: TimeBlock): void => {
+    if (block.source === 'gcal') {
+      e.preventDefault();
+      return;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     const offsetMin = (e.clientY - rect.top) / PX_PER_MIN;
     e.dataTransfer.setData('kind', 'block');
-    e.dataTransfer.setData('blockId', blockId);
+    e.dataTransfer.setData('blockId', block.id);
     e.dataTransfer.setData('offsetMin', String(offsetMin));
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -269,36 +275,46 @@ export function DayView(props: DayViewProps) {
           {blocks.map((b) => {
             const color = blockColor(b);
             const proj = b.projectId !== undefined ? projectById.get(b.projectId) : undefined;
+            const isGcal = b.source === 'gcal';
+            const stripeBg = `repeating-linear-gradient(45deg, ${color}, ${color} 6px, rgba(255,255,255,0.18) 6px, rgba(255,255,255,0.18) 12px)`;
             return (
               <div
                 key={b.id}
-                draggable
-                onDragStart={(e) => handleBlockDragStart(e, b.id)}
-                onDoubleClick={(e) => { e.stopPropagation(); openBlockEdit(b); }}
-                title="ダブルクリックで編集"
+                draggable={!isGcal}
+                onDragStart={(e) => handleBlockDragStart(e, b)}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  openBlockEdit(b);
+                }}
+                onMouseDown={(e) => { if (isGcal) e.stopPropagation(); }}
+                title={isGcal ? `${b.label}\n(Google Calendar の予定 — ダブルクリックで案件割当)` : 'ダブルクリックで編集'}
                 style={{
                   position: 'absolute',
                   top: `${b.start * PX_PER_MIN}px`,
                   left: '6px',
                   right: '14px',
                   height: `${b.durationMin * PX_PER_MIN}px`,
-                  background: color,
+                  background: isGcal ? stripeBg : color,
                   color: 'white',
                   borderRadius: '5px',
                   padding: '4px 8px',
                   fontSize: '12px',
                   overflow: 'hidden',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-                  cursor: 'grab',
+                  cursor: isGcal ? 'default' : 'grab',
+                  opacity: isGcal ? 0.85 : 1,
+                  borderLeft: isGcal ? '3px solid rgba(0,0,0,0.35)' : undefined,
                 }}
               >
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {b.label}
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {isGcal && <span style={{ fontSize: 9, opacity: 0.9 }}>📅</span>}
+                  <span>{b.label}</span>
                 </div>
                 {b.durationMin >= 25 && (
                   <div style={{ fontSize: '10px', opacity: 0.85, marginTop: '2px' }}>
                     {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
                     {proj !== undefined && <span> · {proj.name}</span>}
+                    {isGcal && proj === undefined && <span> · GCal</span>}
                   </div>
                 )}
               </div>

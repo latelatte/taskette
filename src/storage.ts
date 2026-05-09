@@ -1,4 +1,4 @@
-import type { DateString, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { DateString, GcalAssignment, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { DEFAULT_PROJECTS } from './projects.js';
 import { DEFAULT_TEMPLATES } from './templates.js';
 
@@ -10,12 +10,16 @@ export type StoredState = {
   blocksByDate: Record<DateString, readonly TimeBlock[]>;
   projects: readonly Project[];
   templates: readonly TaskTemplate[];
+  gcalAssignments: Record<string, GcalAssignment>;
+  gcalSummaryRules: Record<string, { readonly projectId?: string; readonly hidden?: true }>;
 };
 
 const emptyState = (): StoredState => ({
   blocksByDate: {},
   projects: DEFAULT_PROJECTS,
   templates: DEFAULT_TEMPLATES,
+  gcalAssignments: {},
+  gcalSummaryRules: {},
 });
 
 const isTimeBlock = (v: unknown): v is TimeBlock => {
@@ -28,6 +32,9 @@ const isTimeBlock = (v: unknown): v is TimeBlock => {
   if (o.start + o.durationMin > MINUTES_PER_DAY) return false;
   if (o.templateId !== undefined && typeof o.templateId !== 'string') return false;
   if (o.projectId !== undefined && typeof o.projectId !== 'string') return false;
+  if (o.source !== undefined && o.source !== 'gcal') return false;
+  if (o.gcalKey !== undefined && typeof o.gcalKey !== 'string') return false;
+  if (o.gcalRecurring !== undefined && o.gcalRecurring !== true) return false;
   return true;
 };
 
@@ -60,6 +67,55 @@ const isTaskTemplate = (v: unknown): v is TaskTemplate => {
   if (o.color !== undefined && typeof o.color !== 'string') return false;
   if (o.projectId !== undefined && typeof o.projectId !== 'string') return false;
   return true;
+};
+
+const sanitizeGcalSummaryRules = (
+  raw: unknown,
+  validProjectIds: ReadonlySet<string>,
+): Record<string, { projectId?: string; hidden?: true }> => {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const out: Record<string, { projectId?: string; hidden?: true }> = {};
+  for (const [summary, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (summary.length === 0) continue;
+    if (typeof val !== 'object' || val === null) continue;
+    const v = val as Record<string, unknown>;
+    let next: { projectId?: string; hidden?: true } = {};
+    if (typeof v.projectId === 'string' && validProjectIds.has(v.projectId)) {
+      next = { ...next, projectId: v.projectId };
+    }
+    if (v.hidden === true) {
+      next = { ...next, hidden: true };
+    }
+    if (next.projectId === undefined && next.hidden !== true) continue;
+    out[summary] = next;
+  }
+  return out;
+};
+
+const sanitizeGcalAssignments = (
+  raw: unknown,
+  validProjectIds: ReadonlySet<string>,
+): Record<string, GcalAssignment> => {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const out: Record<string, GcalAssignment> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof val !== 'object' || val === null) continue;
+    const v = val as Record<string, unknown>;
+    const a: GcalAssignment = {};
+    let next: GcalAssignment = a;
+    if (typeof v.projectId === 'string' && validProjectIds.has(v.projectId)) {
+      next = { ...next, projectId: v.projectId };
+    }
+    if (v.hidden === true) {
+      next = { ...next, hidden: true };
+    }
+    if (typeof v.summary === 'string') {
+      next = { ...next, summary: v.summary };
+    }
+    if (next.projectId === undefined && next.hidden !== true) continue; // 意味のないエントリは drop
+    out[key] = next;
+  }
+  return out;
 };
 
 export const loadStore = (): StoredState => {
@@ -118,7 +174,10 @@ export const loadStore = (): StoredState => {
           )
       : DEFAULT_TEMPLATES;
 
-    return { blocksByDate, projects, templates };
+    const gcalAssignments = sanitizeGcalAssignments(obj.gcalAssignments, validProjectIds);
+    const gcalSummaryRules = sanitizeGcalSummaryRules(obj.gcalSummaryRules, validProjectIds);
+
+    return { blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules };
   } catch {
     return emptyState();
   }
@@ -126,9 +185,14 @@ export const loadStore = (): StoredState => {
 
 export const saveStore = (state: StoredState): void => {
   try {
+    const filteredBlocks: Record<DateString, readonly TimeBlock[]> = {};
+    for (const [date, dayBlocks] of Object.entries(state.blocksByDate)) {
+      const native = dayBlocks.filter((b) => b.source !== 'gcal');
+      if (native.length > 0) filteredBlocks[date] = native;
+    }
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ version: SCHEMA_VERSION, ...state }),
+      JSON.stringify({ version: SCHEMA_VERSION, ...state, blocksByDate: filteredBlocks }),
     );
   } catch {
     // localStorage unavailable or quota exceeded — silently ignore for PoC
