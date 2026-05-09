@@ -1,12 +1,13 @@
-import { useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { Day } from './domain/day.js';
-import type { MinuteOfDay, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { SAMPLE_TEMPLATES } from './templates.js';
 import { DEFAULT_PROJECTS, PROJECT_COLOR_PALETTE } from './projects.js';
+import { addDays, formatJaDate, today } from './dates.js';
+import { loadStore, saveStore } from './storage.js';
 
 const PX_PER_MIN = 1;
 const SNAP_MIN = 15;
-const TODAY = '2026-05-09';
 const FREEFORM_DEFAULT_DURATION = 30;
 const DEFAULT_LABEL = '新規ブロック';
 const FALLBACK_BLOCK_COLOR = '#64748b';
@@ -25,8 +26,11 @@ const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
 });
 
 export function App() {
-  const [blocks, setBlocks] = useState<readonly TimeBlock[]>([]);
-  const [projects, setProjects] = useState<readonly Project[]>(DEFAULT_PROJECTS);
+  const [currentDate, setCurrentDate] = useState<DateString>(today);
+  const [blocksByDate, setBlocksByDate] = useState<Record<DateString, readonly TimeBlock[]>>(
+    () => loadStore().blocksByDate,
+  );
+  const [projects, setProjects] = useState<readonly Project[]>(() => loadStore().projects);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
@@ -35,6 +39,22 @@ export function App() {
   const [newProjectColor, setNewProjectColor] = useState<string>(
     PROJECT_COLOR_PALETTE[0] ?? '#64748b',
   );
+
+  useEffect(() => {
+    saveStore({ blocksByDate, projects });
+  }, [blocksByDate, projects]);
+
+  const blocks: readonly TimeBlock[] = blocksByDate[currentDate] ?? [];
+
+  const setBlocks = (
+    action: readonly TimeBlock[] | ((prev: readonly TimeBlock[]) => readonly TimeBlock[]),
+  ): void => {
+    setBlocksByDate((prev) => {
+      const cur = prev[currentDate] ?? [];
+      const updated = typeof action === 'function' ? action(cur) : action;
+      return { ...prev, [currentDate]: updated };
+    });
+  };
 
   const templateById = useMemo(() => {
     const m = new Map<string, TaskTemplate>();
@@ -61,7 +81,7 @@ export function App() {
   };
 
   const applyPlace = (newBlock: TimeBlock, snappedForError: MinuteOfDay): boolean => {
-    const day = new Day(TODAY, blocks);
+    const day = new Day(currentDate, blocks);
     const result = day.place(newBlock);
     if (result.ok) {
       setBlocks(day.blocks);
@@ -77,7 +97,7 @@ export function App() {
   };
 
   const applyMove = (id: string, newStart: MinuteOfDay): void => {
-    const day = new Day(TODAY, blocks);
+    const day = new Day(currentDate, blocks);
     const result = day.move(id, newStart);
     if (result.ok) {
       setBlocks(day.blocks);
@@ -188,8 +208,22 @@ export function App() {
 
   const handleDeleteProject = (id: string): void => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
-    setBlocks((prev) => prev.map((b) => (b.projectId === id ? blockWithoutProject(b) : b)));
+    setBlocksByDate((prev) => {
+      const next: Record<DateString, readonly TimeBlock[]> = {};
+      for (const [date, dayBlocks] of Object.entries(prev)) {
+        next[date] = dayBlocks.map((b) => (b.projectId === id ? blockWithoutProject(b) : b));
+      }
+      return next;
+    });
   };
+
+  const navigateTo = (date: DateString): void => {
+    if (editingId !== null) commitEdit(editingId, editLabel);
+    setError(null);
+    setCurrentDate(date);
+  };
+
+  const isToday = currentDate === today();
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
@@ -257,8 +291,40 @@ export function App() {
       </aside>
 
       <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <header style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white' }}>
-          <h1 style={{ fontSize: '15px', margin: 0, fontWeight: 600 }}>taskette — {TODAY}</h1>
+        <header style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '16px', background: 'white' }}>
+          <h1 style={{ fontSize: '15px', margin: 0, fontWeight: 600 }}>taskette</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              onClick={() => navigateTo(addDays(currentDate, -1))}
+              title="前日"
+              style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#1f2937' }}
+            >◀</button>
+            <span style={{ fontSize: '13px', minWidth: '170px', textAlign: 'center', color: '#1f2937', fontWeight: isToday ? 600 : 400 }}>
+              {formatJaDate(currentDate)}{isToday && <span style={{ marginLeft: '6px', fontSize: '10px', color: '#2563eb' }}>(今日)</span>}
+            </span>
+            <button
+              onClick={() => navigateTo(addDays(currentDate, 1))}
+              title="翌日"
+              style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '12px', cursor: 'pointer', color: '#1f2937' }}
+            >▶</button>
+            <button
+              onClick={() => navigateTo(today())}
+              disabled={isToday}
+              title="今日へジャンプ"
+              style={{
+                background: isToday ? '#f3f4f6' : 'white',
+                border: '1px solid #d1d5db',
+                borderRadius: '4px',
+                padding: '4px 10px',
+                fontSize: '12px',
+                cursor: isToday ? 'not-allowed' : 'pointer',
+                color: '#1f2937',
+                marginLeft: '6px',
+                opacity: isToday ? 0.5 : 1,
+              }}
+            >今日</button>
+          </div>
+          <div style={{ flex: 1 }} />
           {error !== null && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
         </header>
 
