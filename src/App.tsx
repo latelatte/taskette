@@ -316,34 +316,38 @@ export function App() {
     setBlockEdit(null);
   };
 
+  // 非表示は常に「この予定のみ」(誤爆防止)。シリーズ全体非表示は別ハンドラ。
   const hideGcalFromEdit = (): void => {
     if (blockEdit === null || blockEdit.source !== 'gcal' || blockEdit.gcalKey === undefined) return;
     const key = blockEdit.gcalKey;
     const summary = blockEdit.label;
+    setGcalAssignments((prev) => {
+      const cur = prev[key] ?? {};
+      return {
+        ...prev,
+        [key]: {
+          ...(cur.projectId !== undefined ? { projectId: cur.projectId } : {}),
+          hidden: true as const,
+          summary,
+        },
+      };
+    });
+    setError(null);
+    setBlockEdit(null);
+  };
 
-    if (editApplyToAllSameSummary) {
-      // 同名予定すべてを非表示
-      setGcalSummaryRules((prev) => ({ ...prev, [summary]: { hidden: true as const } }));
-      // 個別 assignment は重複防止のため削除
-      setGcalAssignments((prev) => {
-        if (prev[key] === undefined) return prev;
-        const { [key]: _, ...rest } = prev;
-        return rest;
-      });
-    } else {
-      setGcalAssignments((prev) => {
-        const cur = prev[key] ?? {};
-        return {
-          ...prev,
-          [key]: {
-            ...(cur.projectId !== undefined ? { projectId: cur.projectId } : {}),
-            hidden: true as const,
-            summary,
-          },
-        };
-      });
-    }
-
+  // シリーズ全体を非表示にする (明示操作)。 popup の小さなリンクから呼び出し
+  const hideGcalSeriesFromEdit = (): void => {
+    if (blockEdit === null || blockEdit.source !== 'gcal' || blockEdit.gcalKey === undefined) return;
+    const key = blockEdit.gcalKey;
+    const summary = blockEdit.label;
+    if (!window.confirm(`「${summary}」と同名の予定をすべて非表示にします。よろしいですか？\n(設定の「同名予定ルール」から元に戻せます)`)) return;
+    setGcalSummaryRules((prev) => ({ ...prev, [summary]: { hidden: true as const } }));
+    setGcalAssignments((prev) => {
+      if (prev[key] === undefined) return prev;
+      const { [key]: _, ...rest } = prev;
+      return rest;
+    });
     setError(null);
     setBlockEdit(null);
   };
@@ -1742,7 +1746,7 @@ export function App() {
                   checked={editApplyToAllSameSummary}
                   onChange={(e) => setEditApplyToAllSameSummary(e.currentTarget.checked)}
                 />
-                <span>同名予定 ({blockEdit.label.length > 22 ? `${blockEdit.label.slice(0, 22)}…` : blockEdit.label}) すべてに適用</span>
+                <span>同名予定すべてに同じ <strong>案件</strong> を適用 ({blockEdit.label.length > 22 ? `${blockEdit.label.slice(0, 22)}…` : blockEdit.label})</span>
               </label>
             )}
 
@@ -1750,9 +1754,9 @@ export function App() {
               {blockEdit.source === 'gcal' ? (
                 <button
                   onClick={hideGcalFromEdit}
-                  title="このイベントを taskette 上で非表示にします (GCal 側は変更されません)"
+                  title="この予定だけ taskette 上で非表示にします (GCal 側は変更されません)"
                   style={{ background: '#fef3c7', color: '#92400e', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
-                >非表示にする</button>
+                >この予定のみ非表示</button>
               ) : (
                 <button
                   onClick={deleteBlockFromEdit}
@@ -1770,6 +1774,15 @@ export function App() {
                 >保存</button>
               </div>
             </div>
+
+            {blockEdit.source === 'gcal' && (
+              <div style={{ marginTop: 12, paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right' }}>
+                <button
+                  onClick={hideGcalSeriesFromEdit}
+                  style={{ background: 'none', border: 'none', color: '#9ca3af', fontSize: 11, cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                >同名予定すべてを非表示にする…</button>
+              </div>
+            )}
           </div>
         </div>
       )}
