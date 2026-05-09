@@ -1,3 +1,5 @@
+mod oauth;
+
 fn migrations() -> Vec<tauri_plugin_sql::Migration> {
   vec![tauri_plugin_sql::Migration {
     version: 1,
@@ -15,6 +17,13 @@ pub fn run() {
         .add_migrations("sqlite:taskette.db", migrations())
         .build(),
     )
+    .manage(oauth::OAuthState::new())
+    .invoke_handler(tauri::generate_handler![
+      oauth::gcal_oauth_connect,
+      oauth::gcal_oauth_silent_refresh,
+      oauth::gcal_oauth_disconnect,
+      oauth::gcal_oauth_has_refresh_token,
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
