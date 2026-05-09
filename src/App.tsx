@@ -662,11 +662,19 @@ export function App() {
     <div
       className={cn(
         'h-screen grid bg-background text-foreground',
-        sidebarCollapsed ? 'grid-cols-[1fr]' : 'grid-cols-[240px_1fr]',
+        'transition-[grid-template-columns] duration-[280ms] ease-emphasis',
+        sidebarCollapsed ? 'grid-cols-[0px_1fr]' : 'grid-cols-[240px_1fr]',
       )}
     >
-      {!sidebarCollapsed && (
-        <aside className="bg-muted/40 border-r overflow-auto p-4">
+      <aside
+        aria-hidden={sidebarCollapsed}
+        className={cn(
+          'bg-muted/40 border-r overflow-hidden',
+          'transition-[transform,opacity] duration-[280ms] ease-emphasis',
+          sidebarCollapsed && '-translate-x-2 opacity-0 pointer-events-none',
+        )}
+      >
+        <div className="w-[240px] h-full overflow-auto p-4">
           <h2 className="text-xs font-semibold tracking-widest text-muted-foreground uppercase mb-2">
             テンプレート
           </h2>
@@ -712,8 +720,8 @@ export function App() {
             ・設置済みブロックもドラッグで移動<br />
             ・ブロックをダブルクリックで編集
           </p>
-        </aside>
-      )}
+        </div>
+      </aside>
 
       <main className="flex flex-col overflow-hidden">
         <header className="flex items-center gap-4 border-b bg-card/80 backdrop-blur-sm px-4 py-2.5">

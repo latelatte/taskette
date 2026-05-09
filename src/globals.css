@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 /* ============================================================
    Design Tokens — taskette
@@ -59,6 +60,16 @@
   --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 3px rgb(0 0 0 / 0.04);
   --shadow-floaty: 0 4px 12px rgb(0 0 0 / 0.06), 0 2px 4px rgb(0 0 0 / 0.04);
   --shadow-popover: 0 12px 32px rgb(0 0 0 / 0.10), 0 4px 8px rgb(0 0 0 / 0.06);
+
+  /* Motion — Apple-ish easing curves
+     spring  : iOS sheet/popover feel (long decel tail) — for ENTER
+     emphasis: Material 3 emphasized; good for layout shifts (enter/exit 同値)
+     standard: subtle micro-interactions
+     exit    : ease-in 系。閉じる動作は spring の粘りが嫌なので別建て */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-emphasis: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
 /* ---------- Light theme (default) ---------- */
@@ -147,5 +158,19 @@
   *::before,
   *::after {
     border-color: var(--border);
+  }
+}
+
+/* ---------- Reduced motion ----------
+   macOS / iOS の "視差効果を減らす" を ON にしているユーザーには
+   全 transition / animation を実質無効化する。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
