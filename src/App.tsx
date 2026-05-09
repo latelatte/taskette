@@ -17,6 +17,7 @@ import { useGcalCalendarList } from './gcal/useGcalCalendarList.js';
 import { mergeDayBlocks } from './gcal/merge.js';
 import {
   BarChart3,
+  Bell,
   ChevronLeft,
   ChevronRight,
   Keyboard,
@@ -46,6 +47,14 @@ import {
   SelectValue,
 } from './components/ui/select.js';
 import { KeyboardHelpDialog } from './components/KeyboardHelpDialog.js';
+import {
+  getNotificationPermission,
+  previewSound,
+  requestNotificationPermission,
+  useNotificationScheduler,
+  type NotifyPermission,
+} from './notifications.js';
+import { SOUNDS, loadSelectedSoundId, saveSelectedSoundId } from './sounds.js';
 
 const SELECTED_CALENDAR_KEY = 'taskette/gcal-calendar-id';
 
@@ -76,12 +85,24 @@ type BlockEditState = {
   readonly source: 'native' | 'gcal';
   readonly gcalKey?: string;
   readonly gcalRecurring?: true;
+  /** Select 用文字列。'' = 通知なし、それ以外は分数の文字列 ('0', '5', '10' ...) */
+  readonly notifyOffset: string;
 };
 
-type SettingsView = 'menu' | 'projects' | 'templates' | 'gcal' | 'data';
+const NOTIFY_OPTIONS: readonly { readonly value: string; readonly label: string }[] = [
+  { value: '0', label: '開始時' },
+  { value: '5', label: '5分前' },
+  { value: '10', label: '10分前' },
+  { value: '15', label: '15分前' },
+  { value: '30', label: '30分前' },
+  { value: '60', label: '1時間前' },
+];
+
+type SettingsView = 'menu' | 'general' | 'projects' | 'templates' | 'gcal' | 'data';
 
 const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
+  general: '一般',
   projects: '案件設定',
   templates: 'テンプレート設定',
   gcal: 'Google Calendar 連携',
@@ -136,6 +157,12 @@ export function App() {
   const [showSummary, setShowSummary] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
+  const [notifyPermission, setNotifyPermission] = useState<NotifyPermission>('default');
+  const [selectedSoundId, setSelectedSoundIdState] = useState<string>(() => loadSelectedSoundId());
+  const setSelectedSoundId = (id: string): void => {
+    setSelectedSoundIdState(id);
+    saveSelectedSoundId(id);
+  };
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectBudget, setNewProjectBudget] = useState('');
   const [newProjectColor, setNewProjectColor] = useState<string>(
@@ -212,6 +239,12 @@ export function App() {
     if (loadStatus !== 'ready') return;
     void saveStore({ blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules });
   }, [loadStatus, blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
+
+  useNotificationScheduler(blocksByDate);
+
+  useEffect(() => {
+    void getNotificationPermission().then(setNotifyPermission);
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -326,6 +359,7 @@ export function App() {
       durationMin: String(block.durationMin),
       projectId: block.projectId ?? '',
       source: isGcal ? 'gcal' : 'native',
+      notifyOffset: block.notifyOffsetMin !== undefined ? String(block.notifyOffsetMin) : '',
       ...(block.gcalKey !== undefined ? { gcalKey: block.gcalKey } : {}),
       ...(block.gcalRecurring === true ? { gcalRecurring: true as const } : {}),
     });
@@ -412,6 +446,8 @@ export function App() {
       closeBlockEdit();
       return;
     }
+    const notifyOffsetMin =
+      blockEdit.notifyOffset === '' ? undefined : parseInt(blockEdit.notifyOffset, 10);
     const newBlock: TimeBlock = {
       id: original.id,
       label: trimmedLabel,
@@ -419,6 +455,9 @@ export function App() {
       durationMin: dur,
       ...(original.templateId !== undefined ? { templateId: original.templateId } : {}),
       ...(blockEdit.projectId !== '' ? { projectId: blockEdit.projectId } : {}),
+      ...(notifyOffsetMin !== undefined && Number.isFinite(notifyOffsetMin)
+        ? { notifyOffsetMin }
+        : {}),
     };
 
     const others = dayBlocks.filter((b) => b.id !== blockEdit.blockId);
@@ -965,6 +1004,7 @@ export function App() {
           {settingsView === 'menu' && (
             <div className="flex flex-col gap-2">
               {[
+                { key: 'general' as const, label: '一般', desc: '通知音などのアプリ全体の設定' },
                 { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
                 { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
                 { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
@@ -983,6 +1023,45 @@ export function App() {
                   <ChevronRight className="size-4 text-muted-foreground" />
                 </button>
               ))}
+            </div>
+          )}
+
+          {settingsView === 'general' && (
+            <div className="flex flex-col gap-5">
+              <div>
+                <Label className="text-[11px] text-muted-foreground flex items-center gap-1.5 mb-2">
+                  <Bell className="size-3" /> 通知音
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={selectedSoundId}
+                    onValueChange={(v) => setSelectedSoundId(v)}
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SOUNDS.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => previewSound(selectedSoundId)}
+                    disabled={selectedSoundId === 'silent'}
+                  >
+                    試聴
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-2 leading-relaxed">
+                  自前の音を追加するには、ファイルを{' '}
+                  <code className="bg-muted px-1 rounded">public/sounds/</code> に置いて{' '}
+                  <code className="bg-muted px-1 rounded">src/sounds.ts</code>{' '}
+                  に登録してくださいませ。詳細は同ディレクトリ内 README に。
+                </p>
+              </div>
             </div>
           )}
 
@@ -1822,6 +1901,44 @@ export function App() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {blockEdit.source === 'native' && (
+                <div className="space-y-1.5">
+                  <Label
+                    htmlFor="be-notify"
+                    className="text-[11px] text-muted-foreground flex items-center gap-1.5"
+                  >
+                    <Bell className="size-3" /> 通知
+                  </Label>
+                  <Select
+                    value={blockEdit.notifyOffset === '' ? '__none__' : blockEdit.notifyOffset}
+                    onValueChange={(v) => {
+                      const value = v === '__none__' ? '' : v;
+                      setBlockEdit({ ...blockEdit, notifyOffset: value });
+                      if (value !== '') {
+                        void requestNotificationPermission().then(setNotifyPermission);
+                      }
+                    }}
+                  >
+                    <SelectTrigger id="be-notify" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">通知しない</SelectItem>
+                      {NOTIFY_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {blockEdit.notifyOffset !== '' && notifyPermission === 'denied' && (
+                    <p className="text-[11px] text-destructive">
+                      通知が拒否されています。システム設定 → 通知 で taskette を許可してくださいませ。
+                    </p>
+                  )}
+                </div>
+              )}
 
               {blockEdit.source === 'gcal' && (
                 <label className="flex items-start gap-2 text-[12px] text-foreground/85 cursor-pointer leading-relaxed">

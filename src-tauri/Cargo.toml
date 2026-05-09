@@ -24,6 +24,7 @@ log = "0.4"
 tauri = { version = "2.11.1", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-notification = "2"
 oauth2 = "4"
 tiny_http = "0.12"
 keyring = "3"

@@ -37,6 +37,15 @@ const isTimeBlock = (v: unknown): v is TimeBlock => {
   if (o.source !== undefined && o.source !== 'gcal') return false;
   if (o.gcalKey !== undefined && typeof o.gcalKey !== 'string') return false;
   if (o.gcalRecurring !== undefined && o.gcalRecurring !== true) return false;
+  if (
+    o.notifyOffsetMin !== undefined &&
+    (typeof o.notifyOffsetMin !== 'number' ||
+      !Number.isFinite(o.notifyOffsetMin) ||
+      o.notifyOffsetMin < 0 ||
+      o.notifyOffsetMin > 24 * 60)
+  ) {
+    return false;
+  }
   return true;
 };
 
@@ -332,8 +341,9 @@ class SqliteBackend implements StorageBackend {
       template_id: string | null;
       source: string | null;
       gcal_key: string | null;
+      notify_offset_min: number | null;
     }[]>(
-      'SELECT id, date, start_min, duration_min, label, project_id, template_id, source, gcal_key FROM blocks WHERE deleted_at IS NULL',
+      'SELECT id, date, start_min, duration_min, label, project_id, template_id, source, gcal_key, notify_offset_min FROM blocks WHERE deleted_at IS NULL',
     );
     const blocksByDate: Record<DateString, TimeBlock[]> = {};
     for (const r of blockRows) {
@@ -346,6 +356,7 @@ class SqliteBackend implements StorageBackend {
         ...(r.project_id !== null ? { projectId: r.project_id } : {}),
         ...(r.source === 'gcal' ? { source: 'gcal' as const } : {}),
         ...(r.gcal_key !== null ? { gcalKey: r.gcal_key } : {}),
+        ...(r.notify_offset_min !== null ? { notifyOffsetMin: r.notify_offset_min } : {}),
       };
       const list = blocksByDate[r.date] ?? [];
       list.push(block);
@@ -525,8 +536,8 @@ class SqliteBackend implements StorageBackend {
         const old = prevBlocks.get(id);
         if (old === undefined) {
           await db.execute(
-            'INSERT INTO blocks (id, date, start_min, duration_min, label, project_id, template_id, source, gcal_key, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET date = excluded.date, start_min = excluded.start_min, duration_min = excluded.duration_min, label = excluded.label, project_id = excluded.project_id, template_id = excluded.template_id, source = excluded.source, gcal_key = excluded.gcal_key, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = blocks.revision + 1',
-            [id, b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, b.source ?? null, b.gcalKey ?? null, now, now, dev, dev],
+            'INSERT INTO blocks (id, date, start_min, duration_min, label, project_id, template_id, source, gcal_key, notify_offset_min, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET date = excluded.date, start_min = excluded.start_min, duration_min = excluded.duration_min, label = excluded.label, project_id = excluded.project_id, template_id = excluded.template_id, source = excluded.source, gcal_key = excluded.gcal_key, notify_offset_min = excluded.notify_offset_min, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = blocks.revision + 1',
+            [id, b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, b.source ?? null, b.gcalKey ?? null, b.notifyOffsetMin ?? null, now, now, dev, dev],
           );
         } else if (
           old.date !== b.date ||
@@ -534,11 +545,12 @@ class SqliteBackend implements StorageBackend {
           old.durationMin !== b.durationMin ||
           old.label !== b.label ||
           old.projectId !== b.projectId ||
-          old.templateId !== b.templateId
+          old.templateId !== b.templateId ||
+          old.notifyOffsetMin !== b.notifyOffsetMin
         ) {
           await db.execute(
-            'UPDATE blocks SET date = ?, start_min = ?, duration_min = ?, label = ?, project_id = ?, template_id = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
-            [b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, now, dev, id],
+            'UPDATE blocks SET date = ?, start_min = ?, duration_min = ?, label = ?, project_id = ?, template_id = ?, notify_offset_min = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
+            [b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, b.notifyOffsetMin ?? null, now, dev, id],
           );
         }
       }
