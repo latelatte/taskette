@@ -25,20 +25,13 @@ type DayViewProps = {
   readonly projectById: ReadonlyMap<string, Project>;
   readonly templateById: ReadonlyMap<string, TaskTemplate>;
   readonly setError: (s: string | null) => void;
-  readonly editingId: string | null;
-  readonly setEditingId: (id: string | null) => void;
-  readonly editLabel: string;
-  readonly setEditLabel: (s: string) => void;
-  readonly commitEdit: (id: string, rawLabel: string) => void;
-  readonly beginEdit: (b: TimeBlock) => void;
-  readonly handleProjectChange: (blockId: string, newProjectId: string) => void;
+  readonly openBlockEdit: (b: TimeBlock) => void;
 };
 
 export function DayView(props: DayViewProps) {
   const {
     currentDate, blocks, setBlocks, blocksByDate, projects, projectById, templateById,
-    setError, editingId, setEditingId, editLabel, setEditLabel, commitEdit, beginEdit,
-    handleProjectChange,
+    setError, openBlockEdit,
   } = props;
 
   const blockColor = (b: TimeBlock): string => {
@@ -133,14 +126,8 @@ export function DayView(props: DayViewProps) {
       durationMin: FREEFORM_DEFAULT_DURATION,
     };
     if (applyPlace(newBlock, minute)) {
-      beginEdit(newBlock);
+      openBlockEdit(newBlock);
     }
-  };
-
-  const handleRemove = (id: string): void => {
-    setBlocks((prev) => prev.filter((b) => b.id !== id));
-    if (editingId === id) setEditingId(null);
-    setError(null);
   };
 
   return (
@@ -191,12 +178,13 @@ export function DayView(props: DayViewProps) {
           {blocks.map((b) => {
             const color = blockColor(b);
             const proj = b.projectId !== undefined ? projectById.get(b.projectId) : undefined;
-            const isEditing = editingId === b.id;
             return (
               <div
                 key={b.id}
-                draggable={!isEditing}
+                draggable
                 onDragStart={(e) => handleBlockDragStart(e, b.id)}
+                onDoubleClick={(e) => { e.stopPropagation(); openBlockEdit(b); }}
+                title="ダブルクリックで編集"
                 style={{
                   position: 'absolute',
                   top: `${b.start * PX_PER_MIN}px`,
@@ -210,93 +198,13 @@ export function DayView(props: DayViewProps) {
                   fontSize: '12px',
                   overflow: 'hidden',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
-                  cursor: isEditing ? 'text' : 'grab',
+                  cursor: 'grab',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '4px' }}>
-                  {isEditing ? (
-                    <>
-                      <input
-                        autoFocus
-                        value={editLabel}
-                        onChange={(e) => setEditLabel(e.target.value)}
-                        onFocus={(e) => e.currentTarget.select()}
-                        draggable={false}
-                        onBlur={(e) => {
-                          const next = e.relatedTarget;
-                          const blockEl = e.currentTarget.parentElement?.parentElement;
-                          if (next instanceof Node && blockEl && blockEl.contains(next)) return;
-                          commitEdit(b.id, editLabel);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                            e.currentTarget.blur();
-                          } else if (e.key === 'Escape') {
-                            setEditingId(null);
-                          }
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          background: 'rgba(255,255,255,0.18)',
-                          border: '1px solid rgba(255,255,255,0.55)',
-                          color: 'white',
-                          fontSize: '12px',
-                          padding: '1px 4px',
-                          borderRadius: '3px',
-                          outline: 'none',
-                        }}
-                      />
-                      <select
-                        value={b.projectId ?? ''}
-                        onChange={(e) => handleProjectChange(b.id, e.currentTarget.value)}
-                        onBlur={(e) => {
-                          const next = e.relatedTarget;
-                          const blockEl = e.currentTarget.parentElement?.parentElement;
-                          if (next instanceof Node && blockEl && blockEl.contains(next)) return;
-                          commitEdit(b.id, editLabel);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        style={{
-                          maxWidth: '110px',
-                          background: 'rgba(255,255,255,0.18)',
-                          border: '1px solid rgba(255,255,255,0.55)',
-                          color: 'white',
-                          fontSize: '11px',
-                          padding: '1px 2px',
-                          borderRadius: '3px',
-                          outline: 'none',
-                        }}
-                      >
-                        <option value="" style={{ color: '#1f2937' }}>— 未割当 —</option>
-                        {projects.map((p) => (
-                          <option key={p.id} value={p.id} style={{ color: '#1f2937' }}>{p.name}</option>
-                        ))}
-                      </select>
-                    </>
-                  ) : (
-                    <span
-                      onClick={(e) => { e.stopPropagation(); beginEdit(b); }}
-                      style={{
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        cursor: 'text',
-                        flex: 1,
-                      }}
-                    >
-                      {b.label}
-                    </span>
-                  )}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleRemove(b.id); }}
-                    style={{ background: 'rgba(0,0,0,0.25)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px', padding: '0 6px', lineHeight: 1.4 }}
-                    aria-label="削除"
-                  >×</button>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {b.label}
                 </div>
-                {b.durationMin >= 25 && !isEditing && (
+                {b.durationMin >= 25 && (
                   <div style={{ fontSize: '10px', opacity: 0.85, marginTop: '2px' }}>
                     {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
                     {proj !== undefined && <span> · {proj.name}</span>}

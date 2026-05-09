@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import type { DateString, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import { Day } from './domain/day.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
 import { addDays, addMonths, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
 import type { ViewMode } from './views/types.js';
@@ -15,6 +16,29 @@ const fmtH = (h: number): string => {
   const r = Math.round(h * 10) / 10;
   return Number.isInteger(r) ? r.toString() : r.toFixed(1);
 };
+
+const pad2 = (n: number): string => n.toString().padStart(2, '0');
+
+const formatHHMM = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+
+const parseHHMM = (s: string): number | null => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
+  if (m === null) return null;
+  const h = parseInt(m[1] ?? '0', 10);
+  const mm = parseInt(m[2] ?? '0', 10);
+  if (h < 0 || h > 24 || mm < 0 || mm >= 60) return null;
+  return h * 60 + mm;
+};
+
+type BlockEditState = {
+  readonly blockId: string;
+  readonly label: string;
+  readonly startHHMM: string;
+  readonly durationMin: string;
+  readonly projectId: string;
+};
+
+type SettingsView = 'menu' | 'projects' | 'templates';
 
 const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   id: b.id,
@@ -55,11 +79,11 @@ export function App() {
   const [projects, setProjects] = useState<readonly Project[]>(() => loadStore().projects);
   const [templates, setTemplates] = useState<readonly TaskTemplate[]>(() => loadStore().templates);
   const [error, setError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editLabel, setEditLabel] = useState('');
+  const [blockEdit, setBlockEdit] = useState<BlockEditState | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [showTemplateSettings, setShowTemplateSettings] = useState(false);
+  const [settingsView, setSettingsView] = useState<SettingsView>('menu');
   const [showSummary, setShowSummary] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectBudget, setNewProjectBudget] = useState('');
   const [newProjectColor, setNewProjectColor] = useState<string>(
@@ -110,27 +134,80 @@ export function App() {
     e.dataTransfer.effectAllowed = 'copy';
   };
 
-  const commitEdit = (id: string, rawLabel: string): void => {
-    const trimmed = rawLabel.trim();
-    if (trimmed.length > 0) {
-      setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, label: trimmed } : b)));
+  const openBlockEdit = (block: TimeBlock): void => {
+    setBlockEdit({
+      blockId: block.id,
+      label: block.label,
+      startHHMM: formatHHMM(block.start),
+      durationMin: String(block.durationMin),
+      projectId: block.projectId ?? '',
+    });
+  };
+
+  const closeBlockEdit = (): void => {
+    setBlockEdit(null);
+    setError(null);
+  };
+
+  const saveBlockEdit = (): void => {
+    if (blockEdit === null) return;
+    const trimmedLabel = blockEdit.label.trim();
+    if (trimmedLabel.length === 0) {
+      setError('ラベルを入力してくださいまし');
+      return;
     }
-    setEditingId(null);
+    const start = parseHHMM(blockEdit.startHHMM);
+    if (start === null) {
+      setError('開始時刻の形式が不正ですわ (HH:MM)');
+      return;
+    }
+    const dur = parseInt(blockEdit.durationMin, 10);
+    if (!Number.isFinite(dur) || dur <= 0) {
+      setError('時間 (分) を正の整数で入力してくださいまし');
+      return;
+    }
+    if (start + dur > 1440) {
+      setError('一日の範囲を超えていますわ');
+      return;
+    }
+
+    const dayBlocks = blocksByDate[currentDate] ?? [];
+    const original = dayBlocks.find((b) => b.id === blockEdit.blockId);
+    if (original === undefined) {
+      closeBlockEdit();
+      return;
+    }
+    const newBlock: TimeBlock = {
+      id: original.id,
+      label: trimmedLabel,
+      start,
+      durationMin: dur,
+      ...(original.templateId !== undefined ? { templateId: original.templateId } : {}),
+      ...(blockEdit.projectId !== '' ? { projectId: blockEdit.projectId } : {}),
+    };
+
+    const others = dayBlocks.filter((b) => b.id !== blockEdit.blockId);
+    const day = new Day(currentDate, others);
+    const result = day.place(newBlock);
+    if (!result.ok) {
+      if (result.reason === 'overlap') {
+        setError('重なっていますわ — 他のブロックと衝突しています');
+      } else {
+        setError(result.message);
+      }
+      return;
+    }
+
+    setBlocks(day.blocks);
+    setError(null);
+    setBlockEdit(null);
   };
 
-  const beginEdit = (block: TimeBlock): void => {
-    setEditLabel(block.label);
-    setEditingId(block.id);
-  };
-
-  const handleProjectChange = (blockId: string, newProjectId: string): void => {
-    setBlocks((prev) =>
-      prev.map((b) => {
-        if (b.id !== blockId) return b;
-        if (newProjectId === '') return blockWithoutProject(b);
-        return { ...b, projectId: newProjectId };
-      }),
-    );
+  const deleteBlockFromEdit = (): void => {
+    if (blockEdit === null) return;
+    setBlocks((prev) => prev.filter((b) => b.id !== blockEdit.blockId));
+    setError(null);
+    setBlockEdit(null);
   };
 
   const submitNewProject = (): void => {
@@ -223,6 +300,18 @@ export function App() {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
   };
 
+  const closeSettings = (): void => {
+    setShowSettings(false);
+    setColorPickerProjectId(null);
+    setColorPickerTemplateId(null);
+    setSettingsView('menu');
+  };
+
+  const openSettings = (): void => {
+    setSettingsView('menu');
+    setShowSettings(true);
+  };
+
   const handleDeleteProject = (id: string): void => {
     setProjects((prev) => prev.filter((p) => p.id !== id));
     setBlocksByDate((prev) => {
@@ -297,7 +386,7 @@ export function App() {
   };
 
   const navigateToDate = (date: DateString, mode: ViewMode = viewMode): void => {
-    if (editingId !== null) commitEdit(editingId, editLabel);
+    if (blockEdit !== null) closeBlockEdit();
     setError(null);
     setCurrentDate(date);
     setViewMode(mode);
@@ -318,41 +407,12 @@ export function App() {
   })();
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: sidebarCollapsed ? '1fr' : '240px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
+      {!sidebarCollapsed && (
       <aside style={{ background: '#f3f4f6', padding: '16px', borderRight: '1px solid #e5e7eb', overflow: 'auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-          <h2 style={{ fontSize: '13px', margin: 0, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            案件
-          </h2>
-          <button
-            onClick={() => setShowSettings(true)}
-            title="案件設定"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '2px 6px', borderRadius: '4px' }}
-          >⚙</button>
-        </div>
-        <div style={{ marginBottom: '20px' }}>
-          {projects.length === 0 ? (
-            <div style={{ fontSize: '11px', color: '#9ca3af', padding: '4px 6px' }}>案件未登録</div>
-          ) : (
-            projects.map((p) => (
-              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', fontSize: '12px' }}>
-                <span style={{ width: 10, height: 10, borderRadius: 2, background: p.color, flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-              </div>
-            ))
-          )}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-          <h2 style={{ fontSize: '13px', margin: 0, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            テンプレート
-          </h2>
-          <button
-            onClick={() => setShowTemplateSettings(true)}
-            title="テンプレート設定"
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '2px 6px', borderRadius: '4px' }}
-          >⚙</button>
-        </div>
+        <h2 style={{ fontSize: '13px', margin: '0 0 8px', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          テンプレート
+        </h2>
         {templates.length === 0 && (
           <div style={{ fontSize: '11px', color: '#9ca3af', padding: '4px 6px' }}>テンプレート未登録</div>
         )}
@@ -391,12 +451,19 @@ export function App() {
           ・テンプレを D&amp;D で配置<br />
           ・空き時間ダブルクリックで自由記入<br />
           ・設置済みブロックもドラッグで移動<br />
-          ・ラベルクリックで名前と案件を編集
+          ・ブロックをダブルクリックで編集
         </p>
       </aside>
+      )}
 
       <main style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <header style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', gap: '16px', background: 'white' }}>
+          <button
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            title={sidebarCollapsed ? 'サイドバーを表示' : 'サイドバーを隠す'}
+            aria-label="サイドバー切替"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', color: '#374151', padding: '2px 6px', lineHeight: 1 }}
+          >☰</button>
           <h1 style={{ fontSize: '15px', margin: 0, fontWeight: 600 }}>taskette</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button
@@ -459,6 +526,11 @@ export function App() {
             title={`${formatJaYearMonth(yearMonthOf(currentDate))}のサマリー`}
             style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '13px', cursor: 'pointer', color: '#1f2937' }}
           >📊</button>
+          <button
+            onClick={openSettings}
+            title="設定"
+            style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '13px', cursor: 'pointer', color: '#1f2937' }}
+          >⚙</button>
         </header>
 
         {viewMode === 'day' && (
@@ -471,13 +543,7 @@ export function App() {
             projectById={projectById}
             templateById={templateById}
             setError={setError}
-            editingId={editingId}
-            setEditingId={setEditingId}
-            editLabel={editLabel}
-            setEditLabel={setEditLabel}
-            commitEdit={commitEdit}
-            beginEdit={beginEdit}
-            handleProjectChange={handleProjectChange}
+            openBlockEdit={openBlockEdit}
           />
         )}
         {viewMode === 'week' && (
@@ -510,7 +576,7 @@ export function App() {
 
       {showSettings && (
         <div
-          onClick={() => { setShowSettings(false); setColorPickerProjectId(null); }}
+          onClick={closeSettings}
           style={{
             position: 'fixed',
             inset: 0,
@@ -527,22 +593,68 @@ export function App() {
               background: 'white',
               borderRadius: '8px',
               padding: '20px',
-              minWidth: '380px',
+              minWidth: '520px',
               maxWidth: '90vw',
-              maxHeight: '80vh',
+              maxHeight: '85vh',
               overflow: 'auto',
               boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '15px' }}>案件設定</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                {settingsView !== 'menu' && (
+                  <button
+                    onClick={() => setSettingsView('menu')}
+                    aria-label="戻る"
+                    title="設定メニューへ戻る"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
+                  >←</button>
+                )}
+                <h2 style={{ margin: 0, fontSize: '15px' }}>
+                  {settingsView === 'menu' ? '設定' : settingsView === 'projects' ? '案件設定' : 'テンプレート設定'}
+                </h2>
+              </div>
               <button
-                onClick={() => { setShowSettings(false); setColorPickerProjectId(null); }}
+                onClick={closeSettings}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
                 aria-label="閉じる"
               >×</button>
             </div>
 
+            {settingsView === 'menu' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {[
+                  { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
+                  { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => setSettingsView(item.key)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '12px',
+                      padding: '12px 14px',
+                      background: 'white',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      color: '#1f2937',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{item.label}</div>
+                      <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>{item.desc}</div>
+                    </div>
+                    <span style={{ color: '#9ca3af', fontSize: '14px' }}>›</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {settingsView === 'projects' && (<>
             <div style={{ marginBottom: '16px' }}>
               {projects.length === 0 ? (
                 <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>案件が登録されておりません</div>
@@ -694,45 +806,9 @@ export function App() {
                 }}
               >追加</button>
             </div>
-          </div>
-        </div>
-      )}
+            </>)}
 
-      {showTemplateSettings && (
-        <div
-          onClick={() => { setShowTemplateSettings(false); setColorPickerTemplateId(null); }}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 100,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'white',
-              borderRadius: '8px',
-              padding: '20px',
-              minWidth: '480px',
-              maxWidth: '90vw',
-              maxHeight: '80vh',
-              overflow: 'auto',
-              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ margin: 0, fontSize: '15px' }}>テンプレート設定</h2>
-              <button
-                onClick={() => { setShowTemplateSettings(false); setColorPickerTemplateId(null); }}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
-                aria-label="閉じる"
-              >×</button>
-            </div>
-
+            {settingsView === 'templates' && (<>
             <div style={{ marginBottom: '16px' }}>
               {templates.length === 0 ? (
                 <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>テンプレートが登録されておりません</div>
@@ -908,6 +984,7 @@ export function App() {
                 }}
               >追加</button>
             </div>
+            </>)}
           </div>
         </div>
       )}
@@ -1079,6 +1156,110 @@ export function App() {
                 </>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {blockEdit !== null && (
+        <div
+          onClick={closeBlockEdit}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: '8px',
+              padding: '20px',
+              minWidth: '380px',
+              maxWidth: '90vw',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ margin: 0, fontSize: '15px' }}>ブロック編集</h2>
+              <button
+                onClick={closeBlockEdit}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
+                aria-label="閉じる"
+              >×</button>
+            </div>
+
+            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>ラベル</label>
+            <input
+              autoFocus
+              value={blockEdit.label}
+              onChange={(e) => setBlockEdit({ ...blockEdit, label: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveBlockEdit();
+                else if (e.key === 'Escape') closeBlockEdit();
+              }}
+              onFocus={(e) => e.currentTarget.select()}
+              placeholder="ラベル"
+              style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none', marginBottom: '12px' }}
+            />
+
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>開始</label>
+                <input
+                  type="time"
+                  value={blockEdit.startHHMM}
+                  onChange={(e) => setBlockEdit({ ...blockEdit, startHHMM: e.target.value })}
+                  step="900"
+                  style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none' }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>時間 (分)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  step="5"
+                  value={blockEdit.durationMin}
+                  onChange={(e) => setBlockEdit({ ...blockEdit, durationMin: e.target.value })}
+                  style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none' }}
+                />
+              </div>
+            </div>
+
+            <label style={{ display: 'block', fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>案件</label>
+            <select
+              value={blockEdit.projectId}
+              onChange={(e) => setBlockEdit({ ...blockEdit, projectId: e.target.value })}
+              style={{ width: '100%', padding: '6px 8px', fontSize: '13px', border: '1px solid #d1d5db', borderRadius: '4px', boxSizing: 'border-box', outline: 'none', background: 'white', color: '#1f2937', marginBottom: '16px' }}
+            >
+              <option value="">— 未割当 —</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                onClick={deleteBlockFromEdit}
+                style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
+              >削除</button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={closeBlockEdit}
+                  style={{ background: 'white', color: '#6b7280', border: '1px solid #d1d5db', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
+                >キャンセル</button>
+                <button
+                  onClick={saveBlockEdit}
+                  style={{ background: '#2563eb', color: 'white', border: 'none', borderRadius: '4px', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }}
+                >保存</button>
+              </div>
+            </div>
           </div>
         </div>
       )}
