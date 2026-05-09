@@ -1,29 +1,64 @@
 import { useMemo, useState, type DragEvent } from 'react';
 import { Day } from './domain/day.js';
-import type { MinuteOfDay, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { MinuteOfDay, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { SAMPLE_TEMPLATES } from './templates.js';
+import { DEFAULT_PROJECTS, PROJECT_COLOR_PALETTE } from './projects.js';
 
 const PX_PER_MIN = 1;
 const SNAP_MIN = 15;
 const TODAY = '2026-05-09';
 const FREEFORM_DEFAULT_DURATION = 30;
 const DEFAULT_LABEL = '新規ブロック';
+const FALLBACK_BLOCK_COLOR = '#64748b';
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 const snapMinutes = (mins: number): MinuteOfDay =>
   Math.round(Math.max(0, mins) / SNAP_MIN) * SNAP_MIN;
 
+const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
+  id: b.id,
+  label: b.label,
+  start: b.start,
+  durationMin: b.durationMin,
+  ...(b.templateId !== undefined ? { templateId: b.templateId } : {}),
+});
+
 export function App() {
   const [blocks, setBlocks] = useState<readonly TimeBlock[]>([]);
+  const [projects, setProjects] = useState<readonly Project[]>(DEFAULT_PROJECTS);
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectColor, setNewProjectColor] = useState<string>(
+    PROJECT_COLOR_PALETTE[0] ?? '#64748b',
+  );
 
   const templateById = useMemo(() => {
     const m = new Map<string, TaskTemplate>();
     for (const t of SAMPLE_TEMPLATES) m.set(t.id, t);
     return m;
   }, []);
+
+  const projectById = useMemo(() => {
+    const m = new Map<string, Project>();
+    for (const p of projects) m.set(p.id, p);
+    return m;
+  }, [projects]);
+
+  const blockColor = (b: TimeBlock): string => {
+    if (b.projectId !== undefined) {
+      const p = projectById.get(b.projectId);
+      if (p) return p.color;
+    }
+    if (b.templateId !== undefined) {
+      const t = templateById.get(b.templateId);
+      if (t?.color !== undefined) return t.color;
+    }
+    return FALLBACK_BLOCK_COLOR;
+  };
 
   const applyPlace = (newBlock: TimeBlock, snappedForError: MinuteOfDay): boolean => {
     const day = new Day(TODAY, blocks);
@@ -71,7 +106,6 @@ export function App() {
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>): void => {
     e.preventDefault();
-    // dropEffect must be compatible with source's effectAllowed; templates use 'copy', so leave default.
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>): void => {
@@ -86,13 +120,15 @@ export function App() {
       const tmpl = templateById.get(templateId);
       if (!tmpl) return;
       const snapped = snapMinutes(yMin);
-      applyPlace({
+      const newBlock: TimeBlock = {
         id: crypto.randomUUID(),
         label: tmpl.label,
         start: snapped,
         durationMin: tmpl.defaultDurationMin,
         templateId: tmpl.id,
-      }, snapped);
+        ...(tmpl.projectId !== undefined ? { projectId: tmpl.projectId } : {}),
+      };
+      applyPlace(newBlock, snapped);
     } else if (kind === 'block') {
       const blockId = e.dataTransfer.getData('blockId');
       const offsetStr = e.dataTransfer.getData('offsetMin');
@@ -110,7 +146,7 @@ export function App() {
       durationMin: FREEFORM_DEFAULT_DURATION,
     };
     if (applyPlace(newBlock, minute)) {
-      setEditingId(newBlock.id);
+      beginEdit(newBlock);
     }
   };
 
@@ -128,39 +164,95 @@ export function App() {
     setEditingId(null);
   };
 
+  const beginEdit = (block: TimeBlock): void => {
+    setEditLabel(block.label);
+    setEditingId(block.id);
+  };
+
+  const handleProjectChange = (blockId: string, newProjectId: string): void => {
+    setBlocks((prev) =>
+      prev.map((b) => {
+        if (b.id !== blockId) return b;
+        if (newProjectId === '') return blockWithoutProject(b);
+        return { ...b, projectId: newProjectId };
+      }),
+    );
+  };
+
+  const submitNewProject = (): void => {
+    const trimmed = newProjectName.trim();
+    if (trimmed.length === 0) return;
+    setProjects((prev) => [...prev, { id: crypto.randomUUID(), name: trimmed, color: newProjectColor }]);
+    setNewProjectName('');
+  };
+
+  const handleDeleteProject = (id: string): void => {
+    setProjects((prev) => prev.filter((p) => p.id !== id));
+    setBlocks((prev) => prev.map((b) => (b.projectId === id ? blockWithoutProject(b) : b)));
+  };
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', height: '100vh', fontFamily: 'system-ui, -apple-system, sans-serif', color: '#1f2937' }}>
       <aside style={{ background: '#f3f4f6', padding: '16px', borderRight: '1px solid #e5e7eb', overflow: 'auto' }}>
-        <h2 style={{ fontSize: '13px', margin: '0 0 12px', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <h2 style={{ fontSize: '13px', margin: 0, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            案件
+          </h2>
+          <button
+            onClick={() => setShowSettings(true)}
+            title="案件設定"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', color: '#6b7280', padding: '2px 6px', borderRadius: '4px' }}
+          >⚙</button>
+        </div>
+        <div style={{ marginBottom: '20px' }}>
+          {projects.length === 0 ? (
+            <div style={{ fontSize: '11px', color: '#9ca3af', padding: '4px 6px' }}>案件未登録</div>
+          ) : (
+            projects.map((p) => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', fontSize: '12px' }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: p.color, flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+              </div>
+            ))
+          )}
+        </div>
+
+        <h2 style={{ fontSize: '13px', margin: '0 0 8px', color: '#374151', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           テンプレート
         </h2>
-        {SAMPLE_TEMPLATES.map((t) => (
-          <div
-            key={t.id}
-            draggable
-            onDragStart={(e) => handleTemplateDragStart(e, t.id)}
-            style={{
-              background: 'white',
-              border: '1px solid #e5e7eb',
-              borderLeft: `6px solid ${t.color ?? '#94a3b8'}`,
-              padding: '8px 10px',
-              marginBottom: '6px',
-              borderRadius: '6px',
-              cursor: 'grab',
-              fontSize: '13px',
-              userSelect: 'none',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-            }}
-          >
-            <div>{t.label}</div>
-            <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>{t.defaultDurationMin}分</div>
-          </div>
-        ))}
+        {SAMPLE_TEMPLATES.map((t) => {
+          const proj = t.projectId !== undefined ? projectById.get(t.projectId) : undefined;
+          const accent = proj?.color ?? t.color ?? '#94a3b8';
+          return (
+            <div
+              key={t.id}
+              draggable
+              onDragStart={(e) => handleTemplateDragStart(e, t.id)}
+              style={{
+                background: 'white',
+                border: '1px solid #e5e7eb',
+                borderLeft: `6px solid ${accent}`,
+                padding: '8px 10px',
+                marginBottom: '6px',
+                borderRadius: '6px',
+                cursor: 'grab',
+                fontSize: '13px',
+                userSelect: 'none',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
+              }}
+            >
+              <div>{t.label}</div>
+              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                {t.defaultDurationMin}分{proj !== undefined && ` · ${proj.name}`}
+              </div>
+            </div>
+          );
+        })}
         <p style={{ fontSize: '11px', color: '#9ca3af', marginTop: '20px', lineHeight: 1.5 }}>
           ・テンプレを D&amp;D で配置<br />
           ・空き時間ダブルクリックで自由記入<br />
           ・設置済みブロックもドラッグで移動<br />
-          ・ラベルクリックで名前を編集
+          ・ラベルクリックで名前と案件を編集
         </p>
       </aside>
 
@@ -175,9 +267,7 @@ export function App() {
           onDrop={handleDrop}
           style={{ flex: 1, overflow: 'auto', position: 'relative', background: '#fafafa' }}
         >
-          <div
-            style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}
-          >
+          <div style={{ position: 'relative', height: `${1440 * PX_PER_MIN}px`, marginLeft: '52px' }}>
             {Array.from({ length: 48 }).map((_, i) => {
               const minute = i * 30;
               return (
@@ -215,8 +305,8 @@ export function App() {
             ))}
 
             {blocks.map((b) => {
-              const tmpl = b.templateId !== undefined ? templateById.get(b.templateId) : undefined;
-              const color = tmpl?.color ?? '#64748b';
+              const color = blockColor(b);
+              const proj = b.projectId !== undefined ? projectById.get(b.projectId) : undefined;
               const isEditing = editingId === b.id;
               return (
                 <div
@@ -241,34 +331,70 @@ export function App() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '4px' }}>
                     {isEditing ? (
-                      <input
-                        autoFocus
-                        defaultValue={b.label}
-                        draggable={false}
-                        onBlur={(e) => commitEdit(b.id, e.currentTarget.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.currentTarget.blur();
-                          } else if (e.key === 'Escape') {
-                            setEditingId(null);
-                          }
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          flex: 1,
-                          background: 'rgba(255,255,255,0.18)',
-                          border: '1px solid rgba(255,255,255,0.55)',
-                          color: 'white',
-                          fontSize: '12px',
-                          padding: '1px 4px',
-                          borderRadius: '3px',
-                          minWidth: 0,
-                          outline: 'none',
-                        }}
-                      />
+                      <>
+                        <input
+                          autoFocus
+                          value={editLabel}
+                          onChange={(e) => setEditLabel(e.target.value)}
+                          onFocus={(e) => e.currentTarget.select()}
+                          draggable={false}
+                          onBlur={(e) => {
+                            const next = e.relatedTarget;
+                            const blockEl = e.currentTarget.parentElement?.parentElement;
+                            if (next instanceof Node && blockEl && blockEl.contains(next)) return;
+                            commitEdit(b.id, editLabel);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur();
+                            } else if (e.key === 'Escape') {
+                              setEditingId(null);
+                            }
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            flex: 1,
+                            minWidth: 0,
+                            background: 'rgba(255,255,255,0.18)',
+                            border: '1px solid rgba(255,255,255,0.55)',
+                            color: 'white',
+                            fontSize: '12px',
+                            padding: '1px 4px',
+                            borderRadius: '3px',
+                            outline: 'none',
+                          }}
+                        />
+                        <select
+                          value={b.projectId ?? ''}
+                          onChange={(e) => handleProjectChange(b.id, e.currentTarget.value)}
+                          onBlur={(e) => {
+                            const next = e.relatedTarget;
+                            const blockEl = e.currentTarget.parentElement?.parentElement;
+                            if (next instanceof Node && blockEl && blockEl.contains(next)) return;
+                            commitEdit(b.id, editLabel);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          style={{
+                            maxWidth: '110px',
+                            background: 'rgba(255,255,255,0.18)',
+                            border: '1px solid rgba(255,255,255,0.55)',
+                            color: 'white',
+                            fontSize: '11px',
+                            padding: '1px 2px',
+                            borderRadius: '3px',
+                            outline: 'none',
+                          }}
+                        >
+                          <option value="" style={{ color: '#1f2937' }}>— 未割当 —</option>
+                          {projects.map((p) => (
+                            <option key={p.id} value={p.id} style={{ color: '#1f2937' }}>{p.name}</option>
+                          ))}
+                        </select>
+                      </>
                     ) : (
                       <span
-                        onClick={(e) => { e.stopPropagation(); setEditingId(b.id); }}
+                        onClick={(e) => { e.stopPropagation(); beginEdit(b); }}
                         style={{
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
@@ -289,6 +415,7 @@ export function App() {
                   {b.durationMin >= 25 && !isEditing && (
                     <div style={{ fontSize: '10px', opacity: 0.85, marginTop: '2px' }}>
                       {formatMinute(b.start)} – {formatMinute(b.start + b.durationMin)}
+                      {proj !== undefined && <span> · {proj.name}</span>}
                     </div>
                   )}
                 </div>
@@ -297,6 +424,117 @@ export function App() {
           </div>
         </div>
       </main>
+
+      {showSettings && (
+        <div
+          onClick={() => setShowSettings(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: '8px',
+              padding: '20px',
+              minWidth: '380px',
+              maxWidth: '90vw',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ margin: 0, fontSize: '15px' }}>案件設定</h2>
+              <button
+                onClick={() => setShowSettings(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
+                aria-label="閉じる"
+              >×</button>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              {projects.length === 0 ? (
+                <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>案件が登録されておりません</div>
+              ) : (
+                projects.map((p) => (
+                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
+                    <span style={{ width: 14, height: 14, borderRadius: 3, background: p.color, flexShrink: 0 }} />
+                    <span style={{ flex: 1, fontSize: '13px' }}>{p.name}</span>
+                    <button
+                      onClick={() => handleDeleteProject(p.id)}
+                      style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
+                    >削除</button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
+              <div style={{ fontSize: '12px', color: '#374151', marginBottom: '8px', fontWeight: 600 }}>新しい案件を追加</div>
+              <input
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitNewProject();
+                }}
+                placeholder="案件名"
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '4px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+              />
+              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                {PROJECT_COLOR_PALETTE.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setNewProjectColor(c)}
+                    title={c}
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 4,
+                      background: c,
+                      border: newProjectColor === c ? '2px solid #1f2937' : '2px solid transparent',
+                      cursor: 'pointer',
+                      padding: 0,
+                    }}
+                  />
+                ))}
+              </div>
+              <button
+                onClick={submitNewProject}
+                disabled={newProjectName.trim().length === 0}
+                style={{
+                  marginTop: '10px',
+                  width: '100%',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  background: '#2563eb',
+                  color: 'white',
+                  border: 'none',
+                  fontSize: '13px',
+                  cursor: newProjectName.trim().length > 0 ? 'pointer' : 'not-allowed',
+                  opacity: newProjectName.trim().length > 0 ? 1 : 0.5,
+                }}
+              >追加</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

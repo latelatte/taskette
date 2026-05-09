@@ -2,12 +2,18 @@ export type MinuteOfDay = number;
 
 export type DateString = string;
 
+export type Project = {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+};
+
 export type TaskTemplate = {
   readonly id: string;
   readonly label: string;
   readonly defaultDurationMin: number;
   readonly color?: string;
-  readonly category?: string;
+  readonly projectId?: string;
 };
 
 export type TimeBlock = {
@@ -16,6 +22,7 @@ export type TimeBlock = {
   readonly start: MinuteOfDay;
   readonly durationMin: number;
   readonly templateId?: string;
+  readonly projectId?: string;
 };
 
 export type PlaceResult =
