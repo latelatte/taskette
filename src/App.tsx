@@ -734,7 +734,6 @@ export function App() {
           >
             {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </Button>
-          <h1 className="text-base font-semibold tracking-tight">taskette</h1>
 
           <div className="flex items-center gap-1">
             <Button
@@ -746,12 +745,7 @@ export function App() {
             >
               <ChevronLeft />
             </Button>
-            <span
-              className={cn(
-                'text-sm min-w-[220px] text-center text-foreground',
-                isToday && viewMode === 'day' ? 'font-semibold' : 'font-normal',
-              )}
-            >
+            <span className="text-sm min-w-[220px] text-center text-foreground font-semibold">
               {headerDateLabel}
               {isToday && viewMode === 'day' && (
                 <span className="ml-1.5 text-[10px] text-primary">(今日)</span>

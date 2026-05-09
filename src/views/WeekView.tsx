@@ -62,12 +62,12 @@ export function WeekView({ currentDate, blocksByDate, projectById, templateById,
               <div>{WEEKDAY_LABELS[i]}</div>
               <div
                 className={cn(
-                  'text-sm mt-0.5',
+                  'text-sm mt-0.5 font-semibold',
                   isToday
-                    ? 'text-primary font-bold'
+                    ? 'text-primary'
                     : isWeekend
-                      ? 'text-muted-foreground/70 font-medium'
-                      : 'text-foreground font-medium',
+                      ? 'text-muted-foreground/70'
+                      : 'text-foreground',
                 )}
               >
                 {dayNum}
@@ -122,21 +122,23 @@ export function WeekView({ currentDate, blocksByDate, projectById, templateById,
                     key={b.id}
                     title={b.label}
                     className={cn(
-                      'absolute rounded-[3px] text-[10px] px-1 py-px overflow-hidden',
-                      isGcal ? 'text-foreground/90 font-medium' : 'text-white',
+                      'absolute rounded-md overflow-hidden text-foreground',
+                      'transition-[box-shadow,transform] duration-150 shadow-soft',
+                      !isGcal && 'hover:shadow-floaty hover:-translate-y-px cursor-pointer',
                     )}
                     style={{
                       top: `${b.start * PX_PER_MIN}px`,
                       left: '2px',
                       right: '2px',
                       height: `${b.durationMin * PX_PER_MIN}px`,
-                      background: isGcal ? `${color}26` : color,
-                      border: isGcal ? `1px dashed ${color}99` : undefined,
-                      borderLeft: isGcal ? `3px solid ${color}` : undefined,
-                      boxShadow: isGcal ? undefined : 'var(--shadow-soft)',
+                      background: isGcal ? `${color}14` : `${color}26`,
+                      border: isGcal ? `1.5px dashed ${color}80` : `1px solid ${color}40`,
+                      borderLeft: `3px solid ${color}`,
                     }}
                   >
-                    {b.label}
+                    <div className="px-1.5 py-px text-[10px] font-medium leading-tight truncate">
+                      {b.label}
+                    </div>
                   </div>
                 );
               })}

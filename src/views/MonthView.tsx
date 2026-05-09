@@ -72,7 +72,7 @@ export function MonthView({ currentDate, blocksByDate, projects, projectById, on
                 <span
                   className={cn(
                     'inline-flex items-center justify-center text-xs',
-                    isToday ? 'font-bold' : 'font-medium',
+                    isToday ? 'font-bold' : 'font-semibold',
                     isToday
                       ? 'rounded-full w-5 h-5 bg-primary/12 text-primary'
                       : !inMonth
