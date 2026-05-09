@@ -624,7 +624,7 @@ export function App() {
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitNewProject();
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
                 }}
                 placeholder="案件名"
                 style={{
@@ -644,7 +644,7 @@ export function App() {
                 value={newProjectBudget}
                 onChange={(e) => setNewProjectBudget(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitNewProject();
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
                 }}
                 placeholder="月予算 (人月、任意)"
                 style={{
@@ -826,7 +826,7 @@ export function App() {
                 value={newTemplateLabel}
                 onChange={(e) => setNewTemplateLabel(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitNewTemplate();
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
                 }}
                 placeholder="ラベル (例: ☕ コーヒー)"
                 style={{
@@ -848,7 +848,7 @@ export function App() {
                   value={newTemplateDuration}
                   onChange={(e) => setNewTemplateDuration(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') submitNewTemplate();
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
                   }}
                   placeholder="分"
                   title="既定時間 (分)"
@@ -1004,7 +1004,7 @@ export function App() {
                                   value={editingMonthBudgetValue}
                                   onChange={(e) => setEditingMonthBudgetValue(e.target.value)}
                                   onKeyDown={(e) => {
-                                    if (e.key === 'Enter') saveMonthBudgetOverride(p.id, ym);
+                                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveMonthBudgetOverride(p.id, ym);
                                     else if (e.key === 'Escape') cancelEditMonthBudget();
                                   }}
                                   autoFocus

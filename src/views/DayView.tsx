@@ -229,7 +229,7 @@ export function DayView(props: DayViewProps) {
                           commitEdit(b.id, editLabel);
                         }}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
+                          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                             e.currentTarget.blur();
                           } else if (e.key === 'Escape') {
                             setEditingId(null);
