@@ -8,7 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +19,7 @@
   "type": "module",
   "devDependencies": {
     "@rolldown/binding-darwin-arm64": "^1.0.0",
+    "@tauri-apps/cli": "^2.11.1",
     "@types/node": "^25.6.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
