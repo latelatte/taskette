@@ -3,19 +3,28 @@ import { Day } from './domain/day.js';
 import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from './domain/types.js';
 import { SAMPLE_TEMPLATES } from './templates.js';
 import { DEFAULT_PROJECTS, PROJECT_COLOR_PALETTE } from './projects.js';
-import { addDays, formatJaDate, today } from './dates.js';
+import { addDays, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf } from './dates.js';
 import { loadStore, saveStore } from './storage.js';
+import { aggregateDaily, aggregateMonthly } from './domain/aggregate.js';
 
 const PX_PER_MIN = 1;
 const SNAP_MIN = 15;
 const FREEFORM_DEFAULT_DURATION = 30;
 const DEFAULT_LABEL = '新規ブロック';
 const FALLBACK_BLOCK_COLOR = '#64748b';
+const HOURS_PER_PERSON_MONTH = 160;
+const TOLERANCE_HOURS_PER_PM = 20;
+const PROJECTION_MIN_ELAPSED = 0.2;
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 const snapMinutes = (mins: number): MinuteOfDay =>
   Math.round(Math.max(0, mins) / SNAP_MIN) * SNAP_MIN;
+
+const fmtH = (h: number): string => {
+  const r = Math.round(h * 10) / 10;
+  return Number.isInteger(r) ? r.toString() : r.toFixed(1);
+};
 
 const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   id: b.id,
@@ -35,7 +44,9 @@ export function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [showSettings, setShowSettings] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectBudget, setNewProjectBudget] = useState('');
   const [newProjectColor, setNewProjectColor] = useState<string>(
     PROJECT_COLOR_PALETTE[0] ?? '#64748b',
   );
@@ -202,8 +213,35 @@ export function App() {
   const submitNewProject = (): void => {
     const trimmed = newProjectName.trim();
     if (trimmed.length === 0) return;
-    setProjects((prev) => [...prev, { id: crypto.randomUUID(), name: trimmed, color: newProjectColor }]);
+    const budgetStr = newProjectBudget.trim();
+    const parsed = budgetStr.length > 0 ? parseFloat(budgetStr) : NaN;
+    const hasBudget = Number.isFinite(parsed) && parsed >= 0;
+    setProjects((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        name: trimmed,
+        color: newProjectColor,
+        ...(hasBudget ? { monthlyBudget: parsed } : {}),
+      },
+    ]);
     setNewProjectName('');
+    setNewProjectBudget('');
+  };
+
+  const updateProjectBudget = (id: string, value: string): void => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const trimmed = value.trim();
+        if (trimmed === '') {
+          return { id: p.id, name: p.name, color: p.color };
+        }
+        const num = parseFloat(trimmed);
+        if (!Number.isFinite(num) || num < 0) return p;
+        return { ...p, monthlyBudget: num };
+      }),
+    );
   };
 
   const handleDeleteProject = (id: string): void => {
@@ -326,7 +364,55 @@ export function App() {
           </div>
           <div style={{ flex: 1 }} />
           {error !== null && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
+          <button
+            onClick={() => setShowSummary(true)}
+            title={`${formatJaYearMonth(yearMonthOf(currentDate))}のサマリー`}
+            style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: '4px', padding: '4px 10px', fontSize: '13px', cursor: 'pointer', color: '#1f2937' }}
+          >📊</button>
         </header>
+
+        {(() => {
+          const dailyAgg = aggregateDaily(blocksByDate, currentDate);
+          const dailyAssignedMin = Array.from(dailyAgg.byProject.values()).reduce((a, b) => a + b, 0);
+          const dailyTotalMin = dailyAssignedMin + dailyAgg.unassigned;
+          const projectEntries = projects
+            .map((p) => ({ p, min: dailyAgg.byProject.get(p.id) ?? 0 }))
+            .filter(({ min }) => min > 0);
+          const isEmpty = projectEntries.length === 0 && dailyAgg.unassigned === 0;
+          return (
+            <div style={{
+              padding: '6px 16px',
+              borderBottom: '1px solid #e5e7eb',
+              background: '#f9fafb',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '14px',
+              overflow: 'auto',
+              flexShrink: 0,
+            }}>
+              <span style={{ color: '#6b7280', fontSize: '11px', flexShrink: 0, fontWeight: 600 }}>実績</span>
+              {isEmpty ? (
+                <span style={{ color: '#9ca3af', fontSize: '11px' }}>本日の登録なし</span>
+              ) : (
+                <>
+                  {projectEntries.map(({ p, min }) => (
+                    <span key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color }} />
+                      <span style={{ color: '#374151' }}>{p.name}: {(min / 60).toFixed(1)}h</span>
+                    </span>
+                  ))}
+                  {dailyAgg.unassigned > 0 && (
+                    <span style={{ color: '#6b7280', flexShrink: 0 }}>未割当: {(dailyAgg.unassigned / 60).toFixed(1)}h</span>
+                  )}
+                </>
+              )}
+              <span style={{ marginLeft: 'auto', color: '#1f2937', fontWeight: 600, flexShrink: 0 }}>
+                合計: {(dailyTotalMin / 60).toFixed(1)}h
+              </span>
+            </div>
+          );
+        })()}
 
         <div
           onDragOver={handleDragOver}
@@ -534,6 +620,16 @@ export function App() {
                   <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
                     <span style={{ width: 14, height: 14, borderRadius: 3, background: p.color, flexShrink: 0 }} />
                     <span style={{ flex: 1, fontSize: '13px' }}>{p.name}</span>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min="0"
+                      value={p.monthlyBudget ?? ''}
+                      onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
+                      placeholder="人月"
+                      title="月予算 (人月)"
+                      style={{ width: 70, padding: '3px 6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', outline: 'none' }}
+                    />
                     <button
                       onClick={() => handleDeleteProject(p.id)}
                       style={{ background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: 4, padding: '3px 10px', fontSize: '11px', cursor: 'pointer' }}
@@ -559,6 +655,27 @@ export function App() {
                   border: '1px solid #d1d5db',
                   borderRadius: '4px',
                   boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+              />
+              <input
+                type="number"
+                step="0.05"
+                min="0"
+                value={newProjectBudget}
+                onChange={(e) => setNewProjectBudget(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitNewProject();
+                }}
+                placeholder="月予算 (人月、任意)"
+                style={{
+                  width: '100%',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '4px',
+                  boxSizing: 'border-box',
+                  marginTop: '8px',
                   outline: 'none',
                 }}
               />
@@ -598,6 +715,142 @@ export function App() {
                 }}
               >追加</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showSummary && (
+        <div
+          onClick={() => setShowSummary(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'white',
+              borderRadius: '8px',
+              padding: '20px',
+              minWidth: '420px',
+              maxWidth: '90vw',
+              maxHeight: '80vh',
+              overflow: 'auto',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+            }}
+          >
+            {(() => {
+              const ym = yearMonthOf(currentDate);
+              const aggregate = aggregateMonthly(blocksByDate, ym);
+              const elapsed = elapsedRatio(ym);
+              const totalAssignedMin = Array.from(aggregate.byProject.values()).reduce((a, b) => a + b, 0);
+              const grandTotalMin = totalAssignedMin + aggregate.unassigned;
+              return (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <h2 style={{ margin: 0, fontSize: '15px' }}>{formatJaYearMonth(ym)}のサマリー</h2>
+                    <button
+                      onClick={() => setShowSummary(false)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#6b7280', padding: '0 4px', lineHeight: 1 }}
+                      aria-label="閉じる"
+                    >×</button>
+                  </div>
+
+                  {projects.length === 0 ? (
+                    <div style={{ fontSize: '12px', color: '#9ca3af', padding: '8px 0' }}>案件が登録されておりません</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                      {projects.map((p) => {
+                        const minutes = aggregate.byProject.get(p.id) ?? 0;
+                        const actualH = minutes / 60;
+                        const actualPM = actualH / HOURS_PER_PERSON_MONTH;
+                        const budgetPM = p.monthlyBudget;
+                        const budgetH = budgetPM !== undefined ? budgetPM * HOURS_PER_PERSON_MONTH : undefined;
+                        const toleranceH = budgetPM !== undefined ? budgetPM * TOLERANCE_HOURS_PER_PM : 0;
+                        const lowH = budgetH !== undefined ? Math.max(0, budgetH - toleranceH) : undefined;
+                        const highH = budgetH !== undefined ? budgetH + toleranceH : undefined;
+                        const ratio = budgetH !== undefined && budgetH > 0 ? actualH / budgetH : 0;
+                        const barFraction = highH !== undefined && highH > 0 ? Math.min(1, actualH / highH) : 0;
+                        const isOver = highH !== undefined && actualH > highH;
+                        const isUnderConfirmed = lowH !== undefined && elapsed >= 1 && actualH < lowH;
+                        const projection = elapsed >= PROJECTION_MIN_ELAPSED ? actualH / elapsed : null;
+                        const isProjectedOver = !isOver && highH !== undefined && projection !== null && projection > highH;
+                        const isProjectedUnder = !isUnderConfirmed && lowH !== undefined && projection !== null && projection < lowH && elapsed < 1;
+                        const barColor = isOver
+                          ? '#dc2626'
+                          : isProjectedOver
+                            ? '#f97316'
+                            : (isProjectedUnder || isUnderConfirmed)
+                              ? '#f59e0b'
+                              : p.color;
+                        return (
+                          <div key={p.id}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                              <span style={{ width: 10, height: 10, borderRadius: 2, background: p.color, flexShrink: 0 }} />
+                              <span style={{ fontSize: '13px', flex: 1 }}>{p.name}</span>
+                              <span style={{ fontSize: '12px', color: '#374151' }}>
+                                {actualPM.toFixed(2)}人月 ({actualH.toFixed(1)}h)
+                                {budgetPM !== undefined && (
+                                  <span style={{ color: '#6b7280' }}> / {budgetPM}人月 ({Math.round(ratio * 100)}%)</span>
+                                )}
+                              </span>
+                            </div>
+                            {budgetH !== undefined && (
+                              <div style={{ height: 6, background: '#f3f4f6', borderRadius: 3, overflow: 'hidden' }}>
+                                <div style={{
+                                  width: `${barFraction * 100}%`,
+                                  height: '100%',
+                                  background: barColor,
+                                  transition: 'width 200ms',
+                                }} />
+                              </div>
+                            )}
+                            {budgetH !== undefined && lowH !== undefined && highH !== undefined && (
+                              <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px' }}>
+                                許容 {fmtH(lowH)}h–{fmtH(highH)}h（±{fmtH(toleranceH)}h）
+                              </div>
+                            )}
+                            {isOver && highH !== undefined && (
+                              <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '2px' }}>
+                                ⚠ 超過 ({(actualH - highH).toFixed(1)}h オーバー)
+                              </div>
+                            )}
+                            {isUnderConfirmed && lowH !== undefined && (
+                              <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
+                                ⚠ 不足 ({(lowH - actualH).toFixed(1)}h 不足、月末確定)
+                              </div>
+                            )}
+                            {isProjectedOver && projection !== null && (
+                              <div style={{ fontSize: '11px', color: '#f97316', marginTop: '2px' }}>
+                                ⚠ このままだと月末予測 {projection.toFixed(1)}h（許容を超過する見込み）
+                              </div>
+                            )}
+                            {isProjectedUnder && projection !== null && (
+                              <div style={{ fontSize: '11px', color: '#d97706', marginTop: '2px' }}>
+                                ⚠ このままだと月末予測 {projection.toFixed(1)}h（許容に届かない見込み）
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div style={{ borderTop: '1px solid #e5e7eb', marginTop: '18px', paddingTop: '12px', fontSize: '12px', color: '#374151' }}>
+                    <div>合計実績: {(grandTotalMin / 60).toFixed(1)}h（割当: {(totalAssignedMin / 60).toFixed(1)}h, 未割当: {(aggregate.unassigned / 60).toFixed(1)}h）</div>
+                    <div style={{ color: '#6b7280', marginTop: '4px' }}>
+                      月の経過: {Math.round(elapsed * 100)}%
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

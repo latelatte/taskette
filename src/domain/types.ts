@@ -6,6 +6,7 @@ export type Project = {
   readonly id: string;
   readonly name: string;
   readonly color: string;
+  readonly monthlyBudget?: number;
 };
 
 export type TaskTemplate = {
