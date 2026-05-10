@@ -5,8 +5,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from './ui/dialog.js';
+import { isMac } from '../lib/utils.js';
 
-const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
 const cmdSym = isMac ? '⌘' : 'Ctrl';
 
 type Group = {

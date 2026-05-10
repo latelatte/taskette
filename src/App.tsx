@@ -32,7 +32,7 @@ import {
   Settings2,
   Sparkles,
 } from 'lucide-react';
-import { cn } from './lib/utils.js';
+import { cn, isMac } from './lib/utils.js';
 import { Button } from './components/ui/button.js';
 import {
   Dialog,
@@ -52,6 +52,8 @@ import {
   SelectValue,
 } from './components/ui/select.js';
 import { KeyboardHelpDialog } from './components/KeyboardHelpDialog.js';
+import { HelpPanel } from './components/HelpPanel.js';
+import { ReleaseNotesPanel } from './components/ReleaseNotesPanel.js';
 import {
   getNotificationPermission,
   previewSound,
@@ -103,7 +105,7 @@ const NOTIFY_OPTIONS: readonly { readonly value: string; readonly label: string 
   { value: '60', label: '1時間前' },
 ];
 
-type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'data';
+type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'data' | 'help' | 'releases';
 
 const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
@@ -111,6 +113,8 @@ const SETTINGS_TITLES: Record<SettingsView, string> = {
   projects: '案件設定',
   gcal: 'Google Calendar 連携',
   data: 'データ移行',
+  help: '使い方',
+  releases: 'リリースノート',
 };
 
 const ENERGY_LABEL: Record<ProjectEnergy, string> = {
@@ -1165,7 +1169,7 @@ export function App() {
             variant="ghost"
             size="icon-sm"
             onClick={openSettings}
-            title={`設定 (${/Mac/.test(navigator.platform) ? '⌘' : 'Ctrl'} ,)`}
+            title={`設定 (${isMac ? '⌘' : 'Ctrl'} ,)`}
             aria-label="設定"
           >
             <Settings2 />
@@ -1240,6 +1244,8 @@ export function App() {
                 { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算、ピン留め、負荷' },
                 { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
                 { key: 'data' as const, label: 'データ移行', desc: 'ブラウザ localStorage から JSON で取り込み（上書き）' },
+                { key: 'help' as const, label: '使い方', desc: '基本操作とショートカットの早見表' },
+                { key: 'releases' as const, label: 'リリースノート', desc: 'バージョンごとの変更点' },
               ].map((item) => (
                 <button
                   key={item.key}
@@ -1694,7 +1700,7 @@ export function App() {
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground leading-relaxed">
                 ブラウザ (Chrome 等) で動かしていた taskette の localStorage を取り込みます。
-                ブラウザの DevTools コンソールで以下を実行してクリップボードにコピーし、下のテキスト欄に貼り付けてくださいませ。
+                ブラウザの DevTools コンソールで以下を実行してクリップボードにコピーし、下のテキスト欄に貼り付けてください。
               </p>
               <pre className="text-[11px] bg-muted px-3 py-2 rounded-md overflow-x-auto font-mono">{`copy(localStorage.getItem('taskette/v1'))`}</pre>
               <Label htmlFor="import-textarea" className="text-xs">JSON ペースト欄</Label>
@@ -1712,7 +1718,7 @@ export function App() {
                 <div className="text-xs text-destructive">エラー: {importError}</div>
               )}
               {importStatus === 'success' && (
-                <div className="text-xs text-emerald-600">取り込み完了しましたわ。</div>
+                <div className="text-xs text-emerald-600">取り込み完了しました。</div>
               )}
               <div className="flex gap-2 justify-end">
                 <Button
@@ -1745,6 +1751,15 @@ export function App() {
               )}
             </div>
           )}
+
+          {settingsView === 'help' && (
+            <HelpPanel onOpenShortcuts={() => {
+              closeSettings();
+              setShowKeyboardHelp(true);
+            }} />
+          )}
+
+          {settingsView === 'releases' && <ReleaseNotesPanel />}
         </DialogContent>
       </Dialog>
 

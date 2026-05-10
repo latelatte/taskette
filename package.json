@@ -1,7 +1,7 @@
 {
   "name": "taskette",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "時間ブロッキング × 月次工数管理デスクトップアプリ (Tauri + React)",
   "main": "index.js",
   "scripts": {
     "dev": "vite",
