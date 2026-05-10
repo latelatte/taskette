@@ -12,6 +12,8 @@ const proj = (monthlyBudget?: number): Project => ({
   id: 'p1',
   name: 'A',
   color: '#000',
+  pinned: false,
+  energy: 'mid',
   ...(monthlyBudget !== undefined ? { monthlyBudget } : {}),
 });
 
@@ -109,6 +111,8 @@ describe('effectiveBudgetPM', () => {
     id: 'p1',
     name: 'A',
     color: '#000',
+  pinned: false,
+  energy: 'mid',
     ...(base !== undefined ? { monthlyBudget: base } : {}),
     ...(overrides !== undefined ? { monthlyBudgetOverrides: overrides } : {}),
   });
@@ -146,6 +150,8 @@ describe('projectBudgetUsage with override', () => {
     id: 'p1',
     name: 'A',
     color: '#000',
+  pinned: false,
+  energy: 'mid',
     monthlyBudget: base,
     monthlyBudgetOverrides: overrides,
   });

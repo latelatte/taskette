@@ -2,12 +2,16 @@ export type MinuteOfDay = number;
 
 export type DateString = string;
 
+export type ProjectEnergy = 'low' | 'mid' | 'high';
+
 export type Project = {
   readonly id: string;
   readonly name: string;
   readonly color: string;
   readonly monthlyBudget?: number;
   readonly monthlyBudgetOverrides?: Readonly<Record<string, number>>;
+  readonly pinned: boolean;
+  readonly energy: ProjectEnergy;
 };
 
 export type TaskTemplate = {

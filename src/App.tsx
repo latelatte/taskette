@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type DragEvent } from 'react';
-import type { DateString, GcalAssignment, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { DateString, GcalAssignment, Project, ProjectEnergy, TaskTemplate, TimeBlock } from './domain/types.js';
 import { Day } from './domain/day.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
-import { addDays, addMonths, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
+import { addDays, addMonths, businessDaysRemainingInMonth, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
 import type { ViewMode } from './views/types.js';
 import { DayView } from './views/DayView.js';
 import { WeekView } from './views/WeekView.js';
@@ -11,6 +11,8 @@ import { YearView } from './views/YearView.js';
 import { loadStore, saveStore, importStoreFromJson, isUsingTauriBackend } from './storage.js';
 import { aggregateMonthly } from './domain/aggregate.js';
 import { effectiveBudgetPM, projectBudgetUsage } from './domain/budget.js';
+import { proposeAllocation, type ProposedBlock } from './domain/allocate.js';
+import { loadFocusWindows } from './domain/focus.js';
 import { useGcalAuth } from './gcal/useGcalAuth.js';
 import { useGcalSync } from './gcal/useGcalSync.js';
 import { useGcalCalendarList } from './gcal/useGcalCalendarList.js';
@@ -24,8 +26,11 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   Settings2,
+  Sparkles,
 } from 'lucide-react';
 import { cn } from './lib/utils.js';
 import { Button } from './components/ui/button.js';
@@ -109,6 +114,15 @@ const SETTINGS_TITLES: Record<SettingsView, string> = {
   data: 'データ移行',
 };
 
+const ENERGY_LABEL: Record<ProjectEnergy, string> = {
+  low: '軽',
+  mid: '中',
+  high: '重',
+};
+
+const draftKey = (d: ProposedBlock): string =>
+  `${d.date}|${d.start}|${d.end}|${d.projectId}`;
+
 const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   id: b.id,
   label: b.label,
@@ -155,6 +169,10 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>('menu');
   const [showSummary, setShowSummary] = useState(false);
+  const [proposal, setProposal] = useState<{
+    drafts: readonly ProposedBlock[];
+    rejected: ReadonlySet<string>;
+  } | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [notifyPermission, setNotifyPermission] = useState<NotifyPermission>('default');
@@ -341,11 +359,13 @@ export function App() {
     return m;
   }, [projects]);
 
-  const handleTemplateDragStart = (e: DragEvent<HTMLDivElement>, templateId: string): void => {
-    e.dataTransfer.setData('kind', 'template');
-    e.dataTransfer.setData('templateId', templateId);
+  const handleProjectDragStart = (e: DragEvent<HTMLDivElement>, projectId: string): void => {
+    e.dataTransfer.setData('kind', 'project');
+    e.dataTransfer.setData('projectId', projectId);
     e.dataTransfer.effectAllowed = 'copy';
   };
+
+  const pinnedProjects = useMemo(() => projects.filter((p) => p.pinned), [projects]);
 
   const openBlockEdit = (block: TimeBlock): void => {
     const isGcal = block.source === 'gcal';
@@ -549,6 +569,8 @@ export function App() {
         id: crypto.randomUUID(),
         name: trimmed,
         color: newProjectColor,
+        pinned: false,
+        energy: 'mid',
         ...(hasBudget ? { monthlyBudget: parsed } : {}),
       },
     ]);
@@ -593,6 +615,8 @@ export function App() {
             id: p.id,
             name: p.name,
             color: p.color,
+            pinned: p.pinned,
+            energy: p.energy,
             ...(p.monthlyBudget !== undefined ? { monthlyBudget: p.monthlyBudget } : {}),
           };
         }
@@ -608,7 +632,7 @@ export function App() {
         if (p.id !== id) return p;
         const trimmed = value.trim();
         if (trimmed === '') {
-          return { id: p.id, name: p.name, color: p.color };
+          return { id: p.id, name: p.name, color: p.color, pinned: p.pinned, energy: p.energy };
         }
         const num = parseFloat(trimmed);
         if (!Number.isFinite(num) || num < 0) return p;
@@ -625,6 +649,150 @@ export function App() {
 
   const recolorProject = (id: string, color: string): void => {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, color } : p)));
+  };
+
+  const toggleProjectPinned = (id: string): void => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, pinned: !p.pinned } : p)));
+  };
+
+  const setProjectEnergy = (id: string, energy: ProjectEnergy): void => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, energy } : p)));
+  };
+
+  const runProposalForDates = (targetDates: readonly DateString[]): void => {
+    if (targetDates.length === 0) {
+      setProposal({ drafts: [], rejected: new Set() });
+      return;
+    }
+    // Split by year-month so each group uses its own budget context (spent +
+    // remaining business days). Otherwise a Mon-Fri week spanning two months
+    // would propose May 1 using April's budget.
+    const byMonth = new Map<string, DateString[]>();
+    for (const d of new Set(targetDates)) {
+      const ym = yearMonthOf(d);
+      const list = byMonth.get(ym) ?? [];
+      list.push(d);
+      byMonth.set(ym, list);
+    }
+    const todayD = today();
+    const todayYm = yearMonthOf(todayD);
+    const focusWindows = loadFocusWindows();
+    const allDrafts: ProposedBlock[] = [];
+    for (const [ym, monthDates] of byMonth) {
+      if (ym < todayYm) continue; // skip past months — no proposing into yesterday
+      const sortedMonthDates = [...monthDates].sort();
+      // Anchor = today (current month) or month start (future month). This is
+      // the denominator for "how many days the remaining budget spreads over".
+      const anchor =
+        ym === todayYm ? todayD : (sortedMonthDates[0] ?? `${ym}-01`);
+      const monthAggregate = aggregateMonthly(mergedBlocksByDate, ym);
+      const spentByProjectThisMonth: Record<string, number> = {};
+      for (const [pid, mins] of monthAggregate.byProject) {
+        spentByProjectThisMonth[pid] = mins / 60;
+      }
+      const existingBlocksByDate: Record<DateString, readonly TimeBlock[]> = {};
+      for (const d of sortedMonthDates) {
+        existingBlocksByDate[d] = mergedBlocksByDate[d] ?? [];
+      }
+      const drafts = proposeAllocation({
+        dates: sortedMonthDates,
+        pinnedProjects,
+        existingBlocksByDate,
+        focusWindows,
+        budgetContext: {
+          spentByProjectThisMonth,
+          monthRemainingBusinessDays: businessDaysRemainingInMonth(anchor),
+          targetMonth: ym,
+        },
+      });
+      allDrafts.push(...drafts);
+    }
+    setProposal({ drafts: allDrafts, rejected: new Set() });
+  };
+
+  const runProposal = (): void => {
+    if (viewMode === 'week') {
+      const weekDays = daysOfWeek(currentDate).slice(0, 5); // Mon-Fri
+      runProposalForDates(weekDays);
+    } else {
+      runProposalForDates([currentDate]);
+    }
+  };
+
+  const toggleProposalReject = (key: string): void => {
+    setProposal((prev) => {
+      if (prev === null) return prev;
+      const next = new Set(prev.rejected);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return { ...prev, rejected: next };
+    });
+  };
+
+  const setDayProposalRejected = (date: DateString, rejectAll: boolean): void => {
+    setProposal((prev) => {
+      if (prev === null) return prev;
+      const next = new Set(prev.rejected);
+      for (const d of prev.drafts) {
+        if (d.date !== date) continue;
+        const k = draftKey(d);
+        if (rejectAll) next.add(k);
+        else next.delete(k);
+      }
+      return { ...prev, rejected: next };
+    });
+  };
+
+  const acceptProposal = (): void => {
+    if (proposal === null) return;
+    const accepted = proposal.drafts.filter((d) => !proposal.rejected.has(draftKey(d)));
+    if (accepted.length === 0) {
+      setProposal(null);
+      return;
+    }
+    // Group by date, pre-allocate IDs (pure under React StrictMode double-invoke).
+    const candidatesByDate = new Map<DateString, TimeBlock[]>();
+    for (const d of accepted) {
+      const startMin = parseHHMM(d.start);
+      const endMin = parseHHMM(d.end);
+      if (startMin === null || endMin === null) continue;
+      const block: TimeBlock = {
+        id: crypto.randomUUID(),
+        label: '作業',
+        start: startMin,
+        durationMin: endMin - startMin,
+        projectId: d.projectId,
+      };
+      const list = candidatesByDate.get(d.date) ?? [];
+      list.push(block);
+      candidatesByDate.set(d.date, list);
+    }
+    // Capture GCal blocks per affected date at click time (sync window is 5 min).
+    const gcalByDate = new Map<DateString, readonly TimeBlock[]>();
+    for (const [date] of candidatesByDate) {
+      gcalByDate.set(date, (mergedBlocksByDate[date] ?? []).filter((b) => b.source === 'gcal'));
+    }
+    setBlocksByDate((prev) => {
+      // Re-validate against latest native state per day, inside the updater.
+      const next: Record<DateString, readonly TimeBlock[]> = { ...prev };
+      let anyPlaced = false;
+      for (const [date, candidates] of candidatesByDate) {
+        const native = (prev[date] ?? []).filter((b) => b.source !== 'gcal');
+        const gcal = gcalByDate.get(date) ?? [];
+        const day = new Day(date, [...native, ...gcal]);
+        const placed: TimeBlock[] = [];
+        for (const c of candidates) {
+          const result = day.place(c);
+          if (result.ok) placed.push(c);
+        }
+        if (placed.length > 0) {
+          next[date] = [...native, ...placed];
+          anyPlaced = true;
+        }
+      }
+      return anyPlaced ? next : prev;
+    });
+    setProposal(null);
   };
 
   const closeSettings = (): void => {
@@ -788,23 +956,22 @@ export function App() {
       >
         <div className="w-[240px] h-full overflow-auto p-4">
           <h2 className="text-xs font-semibold tracking-widest text-muted-foreground uppercase mb-2">
-            テンプレート
+            稼働中案件
           </h2>
-          {templates.length === 0 && (
-            <div className="text-[11px] text-muted-foreground/70 px-1.5 py-1">
-              テンプレート未登録
+          {pinnedProjects.length === 0 && (
+            <div className="text-[11px] text-muted-foreground/70 px-1.5 py-1 leading-relaxed">
+              ピン留めされた案件がありませんわ。<br />
+              設定 → 案件設定からピン留めしてくださいまし。
             </div>
           )}
           <div className="flex flex-col gap-1.5">
-            {templates.map((t) => {
-              const proj = t.projectId !== undefined ? projectById.get(t.projectId) : undefined;
-              const accent = proj?.color ?? t.color ?? '#94a3b8';
+            {pinnedProjects.map((p) => {
               const dragEnabled = viewMode === 'day';
               return (
                 <div
-                  key={t.id}
+                  key={p.id}
                   draggable={dragEnabled}
-                  onDragStart={(e) => handleTemplateDragStart(e, t.id)}
+                  onDragStart={(e) => handleProjectDragStart(e, p.id)}
                   title={dragEnabled ? undefined : '日ビューで配置できます'}
                   className={cn(
                     'bg-card border rounded-md text-[13px] select-none',
@@ -814,20 +981,26 @@ export function App() {
                       : 'cursor-default opacity-50',
                   )}
                   style={{
-                    borderLeft: `4px solid ${accent}`,
+                    borderLeft: `4px solid ${p.color}`,
                     boxShadow: 'var(--shadow-soft)',
                   }}
                 >
-                  <div className="leading-tight">{t.label}</div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5">
-                    {t.defaultDurationMin}分{proj !== undefined && ` · ${proj.name}`}
+                  <div className="leading-tight font-medium">{p.name}</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                    {p.monthlyBudget !== undefined ? (
+                      <span>{p.monthlyBudget} 人月</span>
+                    ) : (
+                      <span className="text-muted-foreground/60">予算なし</span>
+                    )}
+                    <span className="text-muted-foreground/40">·</span>
+                    <span>負荷 {ENERGY_LABEL[p.energy]}</span>
                   </div>
                 </div>
               );
             })}
           </div>
           <p className="text-[11px] text-muted-foreground/80 mt-5 leading-relaxed">
-            ・テンプレを D&amp;D で配置<br />
+            ・案件を D&amp;D で配置<br />
             ・空き時間ダブルクリックで自由記入<br />
             ・設置済みブロックもドラッグで移動<br />
             ・ブロックをダブルクリックで編集
@@ -910,6 +1083,17 @@ export function App() {
           <div className="flex-1" />
           {error !== null && (
             <span className="text-destructive text-xs">{error}</span>
+          )}
+          {(viewMode === 'day' || viewMode === 'week') && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={runProposal}
+              title={viewMode === 'week' ? '今週 (月-金) の配分を提案' : 'この日の配分を提案'}
+              aria-label="配分提案"
+            >
+              <Sparkles />
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -1005,8 +1189,7 @@ export function App() {
             <div className="flex flex-col gap-2">
               {[
                 { key: 'general' as const, label: '一般', desc: '通知音などのアプリ全体の設定' },
-                { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算' },
-                { key: 'templates' as const, label: 'テンプレート設定', desc: 'ドラッグ用テンプレの管理' },
+                { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算、ピン留め、負荷' },
                 { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
                 { key: 'data' as const, label: 'データ移行', desc: 'ブラウザ localStorage から JSON で取り込み（上書き）' },
               ].map((item) => (
@@ -1110,6 +1293,39 @@ export function App() {
                           >
                             削除
                           </Button>
+                        </div>
+                        <div className="flex items-center gap-3 mt-2 pl-7">
+                          <button
+                            type="button"
+                            onClick={() => toggleProjectPinned(p.id)}
+                            title={p.pinned ? 'サイドバーから外す' : 'サイドバーに表示'}
+                            aria-label={p.pinned ? 'サイドバーから外す' : 'サイドバーに表示'}
+                            className={cn(
+                              'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] cursor-pointer transition-colors',
+                              p.pinned
+                                ? 'bg-primary/15 text-primary hover:bg-primary/20'
+                                : 'text-muted-foreground hover:bg-accent/40',
+                            )}
+                          >
+                            {p.pinned ? <Pin className="size-3" /> : <PinOff className="size-3" />}
+                            {p.pinned ? 'ピン留め中' : 'ピン留めしない'}
+                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] text-muted-foreground">負荷</span>
+                            <Select
+                              value={p.energy}
+                              onValueChange={(v) => setProjectEnergy(p.id, v as ProjectEnergy)}
+                            >
+                              <SelectTrigger className="h-7 w-[68px] text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="low">軽</SelectItem>
+                                <SelectItem value="mid">中</SelectItem>
+                                <SelectItem value="high">重</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </div>
                         {pickerOpen && (
                           <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
@@ -1989,6 +2205,122 @@ export function App() {
       </Dialog>
 
       <KeyboardHelpDialog open={showKeyboardHelp} onOpenChange={setShowKeyboardHelp} />
+
+      <Dialog open={proposal !== null} onOpenChange={(open) => { if (!open) setProposal(null); }}>
+        {proposal !== null && (() => {
+          const draftsByDate = new Map<DateString, ProposedBlock[]>();
+          for (const d of proposal.drafts) {
+            const list = draftsByDate.get(d.date) ?? [];
+            list.push(d);
+            draftsByDate.set(d.date, list);
+          }
+          const orderedDates = [...draftsByDate.keys()].sort();
+          const isMultiDay = orderedDates.length > 1;
+          const headerLabel = isMultiDay
+            ? `配分提案 — ${orderedDates.length}日分`
+            : `配分提案 — ${formatJaDate(orderedDates[0] ?? currentDate)}`;
+          return (
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>{headerLabel}</DialogTitle>
+              </DialogHeader>
+              {proposal.drafts.length === 0 ? (
+                <div className="text-sm text-muted-foreground py-4 leading-relaxed">
+                  提案できる配分が見つかりませんでしたわ。<br />
+                  ピン留め案件の月予算・残営業日・既存ブロックをご確認くださいまし。
+                  {isMultiDay && (
+                    <><br /><span className="text-[11px]">※ 平日のみ対象 (土日除外)</span></>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {isMultiDay && (
+                    <div className="text-[11px] text-muted-foreground/80 -mt-1">
+                      平日のみ対象 (土日除外)。日付ヘッダーで一括選択/解除できますわ。
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2 max-h-[460px] overflow-auto pr-1">
+                    {orderedDates.map((date) => {
+                      const dayDrafts = draftsByDate.get(date) ?? [];
+                      const dayKeys = dayDrafts.map(draftKey);
+                      const dayAcceptedCount = dayKeys.filter((k) => !proposal.rejected.has(k)).length;
+                      const dayAllAccepted = dayAcceptedCount === dayDrafts.length;
+                      return (
+                        <div key={date} className="flex flex-col gap-1">
+                          {isMultiDay && (
+                            <div className="flex items-baseline justify-between px-1 pt-1 pb-0.5">
+                              <span className="text-xs font-semibold text-foreground/80">
+                                {formatJaDate(date)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setDayProposalRejected(date, dayAllAccepted)}
+                                className="text-[11px] text-primary hover:underline cursor-pointer"
+                              >
+                                {dayAllAccepted ? 'この日を全解除' : 'この日を全選択'}
+                              </button>
+                            </div>
+                          )}
+                          {dayDrafts.map((d) => {
+                            const k = draftKey(d);
+                            const accepted = !proposal.rejected.has(k);
+                            const proj = projectById.get(d.projectId);
+                            return (
+                              <button
+                                key={k}
+                                type="button"
+                                onClick={() => toggleProposalReject(k)}
+                                className={cn(
+                                  'flex items-start gap-3 px-3 py-2.5 border rounded-md text-left transition-colors cursor-pointer',
+                                  accepted
+                                    ? 'bg-card hover:bg-accent/30 border-border'
+                                    : 'bg-muted/30 border-border/40 opacity-60',
+                                )}
+                              >
+                                <Checkbox checked={accepted} className="mt-0.5 pointer-events-none" />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-baseline justify-between gap-2">
+                                    <span className="text-[13px] font-semibold flex items-center gap-1.5">
+                                      <span
+                                        className="inline-block w-2.5 h-2.5 rounded-full"
+                                        style={{ background: proj?.color ?? '#A39A92' }}
+                                      />
+                                      {proj?.name ?? '未割当'}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground tabular-nums">
+                                      {d.start}–{d.end}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                                    {d.reason}
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setProposal(null)}>
+                  キャンセル
+                </Button>
+                {proposal.drafts.length > 0 && (
+                  <Button
+                    onClick={acceptProposal}
+                    disabled={proposal.drafts.length === proposal.rejected.size}
+                  >
+                    採用 ({proposal.drafts.length - proposal.rejected.size}件)
+                  </Button>
+                )}
+              </DialogFooter>
+            </DialogContent>
+          );
+        })()}
+      </Dialog>
     </div>
   );
 }

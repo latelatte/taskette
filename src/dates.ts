@@ -88,3 +88,18 @@ export const addMonths = (s: DateString, n: number): DateString => {
 export const yearOf = (s: DateString): string => s.slice(0, 4);
 
 export const formatJaYear = (year: string): string => `${year}年`;
+
+/** 指定日 (含む) から月末までの営業日 (月-金) の数。祝日は考慮しない MVP 実装。 */
+export const businessDaysRemainingInMonth = (targetDate: DateString): number => {
+  const d = parseDate(targetDate);
+  const ym = yearMonthOf(targetDate);
+  const lastDay = daysInMonth(ym);
+  const startDay = d.getDate();
+  let count = 0;
+  for (let day = startDay; day <= lastDay; day++) {
+    const dt = new Date(d.getFullYear(), d.getMonth(), day);
+    const wd = dt.getDay();
+    if (wd !== 0 && wd !== 6) count++;
+  }
+  return count;
+};

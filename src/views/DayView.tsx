@@ -171,20 +171,20 @@ export function DayView(props: DayViewProps) {
     const rect = target.getBoundingClientRect();
     const yMin = (e.clientY - rect.top + target.scrollTop) / PX_PER_MIN;
 
-    if (kind === 'template') {
-      const templateId = e.dataTransfer.getData('templateId');
-      const tmpl = templateById.get(templateId);
-      if (!tmpl) return;
+    if (kind === 'project') {
+      const projectId = e.dataTransfer.getData('projectId');
+      if (projectId.length === 0 || !projectById.has(projectId)) return;
       const snapped = snapMinutes(yMin);
       const newBlock: TimeBlock = {
         id: crypto.randomUUID(),
-        label: tmpl.label,
+        label: '作業',
         start: snapped,
-        durationMin: tmpl.defaultDurationMin,
-        templateId: tmpl.id,
-        ...(tmpl.projectId !== undefined ? { projectId: tmpl.projectId } : {}),
+        durationMin: 60,
+        projectId,
       };
-      applyPlace(newBlock, snapped);
+      if (applyPlace(newBlock, snapped)) {
+        openBlockEdit(newBlock);
+      }
     } else if (kind === 'block') {
       const blockId = e.dataTransfer.getData('blockId');
       const offsetStr = e.dataTransfer.getData('offsetMin');

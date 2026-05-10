@@ -1,7 +1,18 @@
 import Database from '@tauri-apps/plugin-sql';
-import type { DateString, GcalAssignment, Project, TaskTemplate, TimeBlock } from './domain/types.js';
+import type { DateString, GcalAssignment, Project, ProjectEnergy, TaskTemplate, TimeBlock } from './domain/types.js';
 import { DEFAULT_PROJECTS } from './projects.js';
 import { DEFAULT_TEMPLATES } from './templates.js';
+
+const isProjectEnergy = (v: unknown): v is ProjectEnergy =>
+  v === 'low' || v === 'mid' || v === 'high';
+
+const normalizeProject = (p: Project): Project => ({
+  ...p,
+  // Migration default for existing projects: pin those that have a budget set
+  // (treats them as actively tracked, matching pre-Slice-18 sidebar behavior).
+  pinned: typeof p.pinned === 'boolean' ? p.pinned : p.monthlyBudget !== undefined,
+  energy: isProjectEnergy(p.energy) ? p.energy : 'mid',
+});
 
 const STORAGE_KEY = 'taskette/v1';
 const SCHEMA_VERSION = 1;
@@ -50,13 +61,16 @@ const isTimeBlock = (v: unknown): v is TimeBlock => {
 };
 
 const sanitizeProjectOverrides = (p: Project): Project => {
-  const ov = p.monthlyBudgetOverrides;
-  if (ov === undefined) return p;
+  const base = normalizeProject(p);
+  const ov = base.monthlyBudgetOverrides;
+  if (ov === undefined) return base;
   const dropOverrides = (): Project => ({
-    id: p.id,
-    name: p.name,
-    color: p.color,
-    ...(p.monthlyBudget !== undefined ? { monthlyBudget: p.monthlyBudget } : {}),
+    id: base.id,
+    name: base.name,
+    color: base.color,
+    pinned: base.pinned,
+    energy: base.energy,
+    ...(base.monthlyBudget !== undefined ? { monthlyBudget: base.monthlyBudget } : {}),
   });
   if (typeof ov !== 'object' || ov === null || Array.isArray(ov)) return dropOverrides();
   const clean: Record<string, number> = {};
@@ -66,7 +80,7 @@ const sanitizeProjectOverrides = (p: Project): Project => {
     }
   }
   if (Object.keys(clean).length === 0) return dropOverrides();
-  return { ...p, monthlyBudgetOverrides: clean };
+  return { ...base, monthlyBudgetOverrides: clean };
 };
 
 const isTaskTemplate = (v: unknown): v is TaskTemplate => {
@@ -314,8 +328,10 @@ class SqliteBackend implements StorageBackend {
       name: string;
       color: string;
       monthly_budget_pm: number | null;
+      pinned: number;
+      energy: string;
     }[]>(
-      'SELECT id, name, color, monthly_budget_pm FROM projects WHERE deleted_at IS NULL',
+      'SELECT id, name, color, monthly_budget_pm, pinned, energy FROM projects WHERE deleted_at IS NULL',
     );
 
     const overrideRows = await db.select<{
@@ -333,10 +349,20 @@ class SqliteBackend implements StorageBackend {
     }
 
     const projects: Project[] = projectRows.map((r) => {
-      const obj: { id: string; name: string; color: string; monthlyBudget?: number; monthlyBudgetOverrides?: Record<string, number> } = {
+      const obj: {
+        id: string;
+        name: string;
+        color: string;
+        pinned: boolean;
+        energy: ProjectEnergy;
+        monthlyBudget?: number;
+        monthlyBudgetOverrides?: Record<string, number>;
+      } = {
         id: r.id,
         name: r.name,
         color: r.color,
+        pinned: r.pinned === 1,
+        energy: isProjectEnergy(r.energy) ? r.energy : 'mid',
       };
       if (r.monthly_budget_pm !== null) obj.monthlyBudget = r.monthly_budget_pm;
       const ov = overrideMap[r.id];
@@ -471,13 +497,19 @@ class SqliteBackend implements StorageBackend {
         const old = prevProjMap.get(id);
         if (old === undefined) {
           await db.execute(
-            'INSERT INTO projects (id, name, color, monthly_budget_pm, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, monthly_budget_pm = excluded.monthly_budget_pm, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = projects.revision + 1',
-            [id, p.name, p.color, p.monthlyBudget ?? null, now, now, dev, dev],
+            'INSERT INTO projects (id, name, color, monthly_budget_pm, pinned, energy, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, monthly_budget_pm = excluded.monthly_budget_pm, pinned = excluded.pinned, energy = excluded.energy, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = projects.revision + 1',
+            [id, p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, now, now, dev, dev],
           );
-        } else if (old.name !== p.name || old.color !== p.color || old.monthlyBudget !== p.monthlyBudget) {
+        } else if (
+          old.name !== p.name ||
+          old.color !== p.color ||
+          old.monthlyBudget !== p.monthlyBudget ||
+          old.pinned !== p.pinned ||
+          old.energy !== p.energy
+        ) {
           await db.execute(
-            'UPDATE projects SET name = ?, color = ?, monthly_budget_pm = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
-            [p.name, p.color, p.monthlyBudget ?? null, now, dev, id],
+            'UPDATE projects SET name = ?, color = ?, monthly_budget_pm = ?, pinned = ?, energy = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
+            [p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, now, dev, id],
           );
         }
       }

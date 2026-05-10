@@ -18,7 +18,7 @@ export const PROJECT_COLOR_PALETTE: readonly string[] = [
 ];
 
 export const DEFAULT_PROJECTS: readonly Project[] = [
-  { id: 'p-a', name: 'A案件', color: '#94A6BD' },
-  { id: 'p-b', name: 'B案件', color: '#C18B9C' },
-  { id: 'p-internal', name: '内部業務', color: '#A39A92' },
+  { id: 'p-a', name: 'A案件', color: '#94A6BD', pinned: true, energy: 'high' },
+  { id: 'p-b', name: 'B案件', color: '#C18B9C', pinned: true, energy: 'mid' },
+  { id: 'p-internal', name: '内部業務', color: '#A39A92', pinned: false, energy: 'low' },
 ];
