@@ -103,13 +103,12 @@ const NOTIFY_OPTIONS: readonly { readonly value: string; readonly label: string 
   { value: '60', label: '1時間前' },
 ];
 
-type SettingsView = 'menu' | 'general' | 'projects' | 'templates' | 'gcal' | 'data';
+type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'data';
 
 const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
   general: '一般',
   projects: '案件設定',
-  templates: 'テンプレート設定',
   gcal: 'Google Calendar 連携',
   data: 'データ移行',
 };
@@ -129,14 +128,6 @@ const blockWithoutProject = (b: TimeBlock): TimeBlock => ({
   start: b.start,
   durationMin: b.durationMin,
   ...(b.templateId !== undefined ? { templateId: b.templateId } : {}),
-});
-
-const blockWithoutTemplate = (b: TimeBlock): TimeBlock => ({
-  id: b.id,
-  label: b.label,
-  start: b.start,
-  durationMin: b.durationMin,
-  ...(b.projectId !== undefined ? { projectId: b.projectId } : {}),
 });
 
 const templateWithoutProject = (t: TaskTemplate): TaskTemplate => ({
@@ -160,6 +151,8 @@ export function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [blocksByDate, setBlocksByDate] = useState<Record<DateString, readonly TimeBlock[]>>({});
   const [projects, setProjects] = useState<readonly Project[]>([]);
+  // Template editing UI was removed (Slice 18+). Persisted templates are still
+  // loaded so that existing blocks with templateId keep their color via templateById.
   const [templates, setTemplates] = useState<readonly TaskTemplate[]>([]);
   const [gcalAssignments, setGcalAssignments] = useState<Record<string, GcalAssignment>>({});
   const [gcalSummaryRules, setGcalSummaryRules] = useState<Record<string, { projectId?: string; hidden?: true }>>({});
@@ -187,13 +180,6 @@ export function App() {
     PROJECT_COLOR_PALETTE[0] ?? '#64748b',
   );
   const [colorPickerProjectId, setColorPickerProjectId] = useState<string | null>(null);
-  const [newTemplateLabel, setNewTemplateLabel] = useState('');
-  const [newTemplateDuration, setNewTemplateDuration] = useState('30');
-  const [newTemplateProjectId, setNewTemplateProjectId] = useState<string>('');
-  const [newTemplateColor, setNewTemplateColor] = useState<string>(
-    PROJECT_COLOR_PALETTE[0] ?? '#64748b',
-  );
-  const [colorPickerTemplateId, setColorPickerTemplateId] = useState<string | null>(null);
   const [editingMonthBudgetProjectId, setEditingMonthBudgetProjectId] = useState<string | null>(null);
   const [editingMonthBudgetValue, setEditingMonthBudgetValue] = useState('');
   const [importText, setImportText] = useState('');
@@ -564,21 +550,21 @@ export function App() {
 
     const trimmedLabel = blockEdit.label.trim();
     if (trimmedLabel.length === 0) {
-      setError('ラベルを入力してくださいまし');
+      setError('ラベルを入力してください');
       return;
     }
     const start = parseHHMM(blockEdit.startHHMM);
     if (start === null) {
-      setError('開始時刻の形式が不正ですわ (HH:MM)');
+      setError('開始時刻の形式が不正です (HH:MM)');
       return;
     }
     const dur = parseInt(blockEdit.durationMin, 10);
     if (!Number.isFinite(dur) || dur <= 0) {
-      setError('時間 (分) を正の整数で入力してくださいまし');
+      setError('時間 (分) を正の整数で入力してください');
       return;
     }
     if (start + dur > 1440) {
-      setError('一日の範囲を超えていますわ');
+      setError('一日の範囲を超えています');
       return;
     }
 
@@ -925,7 +911,6 @@ export function App() {
   const closeSettings = (): void => {
     setShowSettings(false);
     setColorPickerProjectId(null);
-    setColorPickerTemplateId(null);
     setSettingsView('menu');
   };
 
@@ -948,64 +933,6 @@ export function App() {
     );
   };
 
-  const submitNewTemplate = (): void => {
-    const trimmed = newTemplateLabel.trim();
-    if (trimmed.length === 0) return;
-    const dur = parseInt(newTemplateDuration, 10);
-    if (!Number.isFinite(dur) || dur <= 0 || dur > 1440) return;
-    setTemplates((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        label: trimmed,
-        defaultDurationMin: dur,
-        color: newTemplateColor,
-        ...(newTemplateProjectId !== '' ? { projectId: newTemplateProjectId } : {}),
-      },
-    ]);
-    setNewTemplateLabel('');
-    setNewTemplateDuration('30');
-    setNewTemplateProjectId('');
-  };
-
-  const renameTemplate = (id: string, label: string): void => {
-    const trimmed = label.trim();
-    if (trimmed.length === 0) return;
-    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, label: trimmed } : t)));
-  };
-
-  const updateTemplateDuration = (id: string, value: string): void => {
-    const trimmed = value.trim();
-    if (trimmed === '') return;
-    const num = parseInt(trimmed, 10);
-    if (!Number.isFinite(num) || num <= 0 || num > 1440) return;
-    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, defaultDurationMin: num } : t)));
-  };
-
-  const updateTemplateProject = (id: string, projectId: string): void => {
-    setTemplates((prev) =>
-      prev.map((t) => {
-        if (t.id !== id) return t;
-        if (projectId === '') return templateWithoutProject(t);
-        return { ...t, projectId };
-      }),
-    );
-  };
-
-  const recolorTemplate = (id: string, color: string): void => {
-    setTemplates((prev) => prev.map((t) => (t.id === id ? { ...t, color } : t)));
-  };
-
-  const handleDeleteTemplate = (id: string): void => {
-    setTemplates((prev) => prev.filter((t) => t.id !== id));
-    setBlocksByDate((prev) => {
-      const next: Record<DateString, readonly TimeBlock[]> = {};
-      for (const [date, dayBlocks] of Object.entries(prev)) {
-        next[date] = dayBlocks.map((b) => (b.templateId === id ? blockWithoutTemplate(b) : b));
-      }
-      return next;
-    });
-  };
 
   const navigateToDate = (date: DateString, mode: ViewMode = viewMode): void => {
     if (blockEdit !== null) closeBlockEdit();
@@ -1087,8 +1014,8 @@ export function App() {
           </h2>
           {pinnedProjects.length === 0 && (
             <div className="text-[11px] text-muted-foreground/70 px-1.5 py-1 leading-relaxed">
-              ピン留めされた案件がありませんわ。<br />
-              設定 → 案件設定からピン留めしてくださいまし。
+              ピン留めされた案件がありません。<br />
+              設定 → 案件設定からピン留めしてください。
             </div>
           )}
           <div className="flex flex-col gap-1.5">
@@ -1126,12 +1053,6 @@ export function App() {
               );
             })}
           </div>
-          <p className="text-[11px] text-muted-foreground/80 mt-5 leading-relaxed">
-            ・案件を D&amp;D で配置<br />
-            ・空き時間ダブルクリックで自由記入<br />
-            ・設置済みブロックもドラッグで移動<br />
-            ・ブロックをダブルクリックで編集
-          </p>
         </div>
       </aside>
 
@@ -1528,160 +1449,6 @@ export function App() {
             </>
           )}
 
-          {settingsView === 'templates' && (
-            <>
-              <div className="mb-4">
-                {templates.length === 0 ? (
-                  <div className="text-xs text-muted-foreground py-2">テンプレートが登録されておりません</div>
-                ) : (
-                  templates.map((t) => {
-                    const pickerOpen = colorPickerTemplateId === t.id;
-                    const swatchColor = t.color ?? (t.projectId !== undefined ? projectById.get(t.projectId)?.color : undefined) ?? '#A39A92';
-                    return (
-                      <div key={t.id} className="py-2 border-b border-border/60">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setColorPickerTemplateId(pickerOpen ? null : t.id)}
-                            title="色を変更"
-                            aria-label="色を変更"
-                            className={cn(
-                              'w-[18px] h-[18px] rounded shrink-0 cursor-pointer p-0 transition-shadow',
-                              pickerOpen ? 'ring-2 ring-foreground ring-offset-1' : 'border border-foreground/10',
-                            )}
-                            style={{ background: swatchColor }}
-                          />
-                          <Input
-                            value={t.label}
-                            onChange={(e) => renameTemplate(t.id, e.currentTarget.value)}
-                            placeholder="ラベル"
-                            className="flex-1 h-8 text-[13px]"
-                          />
-                          <Input
-                            type="number"
-                            min={1}
-                            max={1440}
-                            step={5}
-                            value={t.defaultDurationMin}
-                            onChange={(e) => updateTemplateDuration(t.id, e.currentTarget.value)}
-                            title="既定時間 (分)"
-                            className="w-16 h-8 text-xs"
-                          />
-                          <Select
-                            value={t.projectId ?? '__unassigned__'}
-                            onValueChange={(v) => updateTemplateProject(t.id, v === '__unassigned__' ? '' : v)}
-                          >
-                            <SelectTrigger className="max-w-[120px] h-8 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__unassigned__">— 未割当 —</SelectItem>
-                              {projects.map((p) => (
-                                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            onClick={() => handleDeleteTemplate(t.id)}
-                          >
-                            削除
-                          </Button>
-                        </div>
-                        {pickerOpen && (
-                          <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
-                            {PROJECT_COLOR_PALETTE.map((c) => (
-                              <button
-                                key={c}
-                                type="button"
-                                onClick={() => {
-                                  recolorTemplate(t.id, c);
-                                  setColorPickerTemplateId(null);
-                                }}
-                                title={c}
-                                className={cn(
-                                  'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
-                                  t.color === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
-                                )}
-                                style={{ background: c }}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              <div className="border-t border-border/60 pt-3.5 space-y-2">
-                <div className="text-xs text-foreground/85 font-semibold">新しいテンプレートを追加</div>
-                <Input
-                  value={newTemplateLabel}
-                  onChange={(e) => setNewTemplateLabel(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
-                  }}
-                  placeholder="ラベル (例: ☕ コーヒー)"
-                />
-                <div className="flex gap-2">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={1440}
-                    step={5}
-                    value={newTemplateDuration}
-                    onChange={(e) => setNewTemplateDuration(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewTemplate();
-                    }}
-                    placeholder="分"
-                    title="既定時間 (分)"
-                    className="w-20"
-                  />
-                  <Select
-                    value={newTemplateProjectId === '' ? '__unassigned__' : newTemplateProjectId}
-                    onValueChange={(v) => setNewTemplateProjectId(v === '__unassigned__' ? '' : v)}
-                  >
-                    <SelectTrigger className="flex-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__unassigned__">— 案件未割当 —</SelectItem>
-                      {projects.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex gap-1.5 flex-wrap">
-                  {PROJECT_COLOR_PALETTE.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setNewTemplateColor(c)}
-                      title={c}
-                      className={cn(
-                        'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
-                        newTemplateColor === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
-                      )}
-                      style={{ background: c }}
-                    />
-                  ))}
-                </div>
-                <Button
-                  onClick={submitNewTemplate}
-                  disabled={newTemplateLabel.trim().length === 0}
-                  className="w-full"
-                >
-                  <Plus />
-                  追加
-                </Button>
-              </div>
-            </>
-          )}
-
           {settingsView === 'gcal' && (
             <div>
               <div className="text-xs text-foreground/85 leading-relaxed mb-3.5">
@@ -1824,7 +1591,7 @@ export function App() {
                             ) : gcalSync.errorStatus === 429 ? (
                               <>
                                 <div className="font-semibold">API リクエスト制限</div>
-                                <div>しばらく待ってから再同期ボタンを押してくださいまし。</div>
+                                <div>しばらく待ってから再同期ボタンを押してください。</div>
                               </>
                             ) : gcalSync.errorStatus !== null && gcalSync.errorStatus >= 500 ? (
                               <>
@@ -1834,7 +1601,7 @@ export function App() {
                             ) : (
                               <>
                                 <div className="font-semibold">同期エラー</div>
-                                <div>{gcalSync.errorMessage ?? 'ネットワーク接続をご確認くださいまし'}</div>
+                                <div>{gcalSync.errorMessage ?? 'ネットワーク接続を確認してください'}</div>
                               </>
                             )}
                           </div>
@@ -1939,7 +1706,7 @@ export function App() {
                 placeholder='{"version":1,"blocksByDate":{...},"projects":[...],...}'
               />
               <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                ⚠ 取り込みは現在のデータをすべて上書きしますの。元には戻せません。
+                取り込みは現在のデータをすべて上書きします。元には戻せません。
               </div>
               {importError !== null && (
                 <div className="text-xs text-destructive">エラー: {importError}</div>
@@ -1973,7 +1740,7 @@ export function App() {
               </div>
               {!isUsingTauriBackend() && (
                 <div className="text-[11px] text-muted-foreground border-t pt-2 mt-2">
-                  現在はブラウザ環境ですので、取り込み先も localStorage です。Tauri アプリで実行すれば SQLite に書き込まれますの。
+                  現在はブラウザ環境のため、取り込み先も localStorage です。Tauri アプリで実行すれば SQLite に書き込まれます。
                 </div>
               )}
             </div>
@@ -2353,8 +2120,8 @@ export function App() {
               </DialogHeader>
               {proposal.drafts.length === 0 ? (
                 <div className="text-sm text-muted-foreground py-4 leading-relaxed">
-                  提案できる配分が見つかりませんでしたわ。<br />
-                  ピン留め案件の月予算・残営業日・既存ブロックをご確認くださいまし。
+                  提案できる配分が見つかりませんでした。<br />
+                  ピン留め案件の月予算・残営業日・既存ブロックを確認してください。
                   {isMultiDay && (
                     <><br /><span className="text-[11px]">※ 平日のみ対象 (土日除外)</span></>
                   )}
@@ -2363,7 +2130,7 @@ export function App() {
                 <>
                   {isMultiDay && (
                     <div className="text-[11px] text-muted-foreground/80 -mt-1">
-                      平日のみ対象 (土日除外)。日付ヘッダーで一括選択/解除できますわ。
+                      平日のみ対象 (土日除外)。日付ヘッダーで一括選択/解除できます。
                     </div>
                   )}
                   <div className="flex flex-col gap-2 max-h-[460px] overflow-auto pr-1">

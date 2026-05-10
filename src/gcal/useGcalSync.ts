@@ -54,9 +54,9 @@ export const useGcalSync = (
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
 
-  // codex review P2 (1): TTL is keyed by (calendarId, targetMonths) so changing
-  // calendar or navigating to a new month does not get suppressed by a stale
-  // global timestamp. lastSyncedAt (state) is still maintained for UI display.
+  // TTL is keyed by (calendarId, targetMonths) so changing the calendar or
+  // navigating to a new month is not suppressed by a stale global timestamp.
+  // lastSyncedAt (state) is still maintained for UI display.
   const lastSyncedKeyRef = useRef<string | null>(null);
   const lastSyncedAtForKeyRef = useRef<number | null>(null);
   const inflightRef = useRef<boolean>(false);
@@ -69,8 +69,9 @@ export const useGcalSync = (
   }, [currentDate]);
 
   // calendarId 変更時 / accessToken 取得時: DB から既存 events を読み込んで即時表示。
-  // codex review P2 (2): accessToken が null (= 未接続/切断中) のときは cached events
-  // を表示しない。DB のレコードは保持するので、再接続時に復元される。
+  // accessToken が null (未接続/切断中) のときは cached events を表示しない
+  // (プライバシー上、切断後に予定が見え続けるのを避ける)。
+  // DB のレコードは保持するので、再接続時に復元される。
   useEffect(() => {
     let cancelled = false;
     if (accessToken === null || accessToken.length === 0) {

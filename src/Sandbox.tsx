@@ -156,7 +156,7 @@ export function Sandbox() {
           shadcn/ui live samples
         </h2>
         <p className="text-sm text-muted-foreground mb-8">
-          以下は実際の shadcn コンポーネント。Slice 13-C 以降で既存モーダルを置き換えていく素材ですわ。
+          以下は実際の shadcn コンポーネント。既存モーダル置き換え用の素材。
         </p>
 
         <Section title="Button variants">
@@ -230,7 +230,7 @@ export function Sandbox() {
               <DialogHeader>
                 <DialogTitle>ブロックを編集</DialogTitle>
                 <DialogDescription>
-                  時刻・案件・ラベルを変更できます。会社ツール転記用にラベルは判別しやすい名前を推奨ですわ。
+                  時刻・案件・ラベルを変更できます。会社ツール転記用にラベルは判別しやすい名前を推奨。
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-2">
