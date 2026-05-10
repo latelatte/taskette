@@ -44,7 +44,7 @@ type DayViewProps = {
   readonly projectById: ReadonlyMap<string, Project>;
   readonly templateById: ReadonlyMap<string, TaskTemplate>;
   readonly setError: (s: string | null) => void;
-  readonly openBlockEdit: (b: TimeBlock) => void;
+  readonly openBlockEdit: (b: TimeBlock, opts?: { justCreated?: boolean }) => void;
 };
 
 export function DayView(props: DayViewProps) {
@@ -183,7 +183,7 @@ export function DayView(props: DayViewProps) {
         projectId,
       };
       if (applyPlace(newBlock, snapped)) {
-        openBlockEdit(newBlock);
+        openBlockEdit(newBlock, { justCreated: true });
       }
     } else if (kind === 'block') {
       const blockId = e.dataTransfer.getData('blockId');
@@ -202,7 +202,7 @@ export function DayView(props: DayViewProps) {
       durationMin: FREEFORM_DEFAULT_DURATION,
     };
     if (applyPlace(newBlock, minute)) {
-      openBlockEdit(newBlock);
+      openBlockEdit(newBlock, { justCreated: true });
     }
   };
 
@@ -310,7 +310,7 @@ export function DayView(props: DayViewProps) {
         durationMin: duration,
       };
       if (applyPlaceRef.current(newBlock, a)) {
-        openBlockEditRef.current(newBlock);
+        openBlockEditRef.current(newBlock, { justCreated: true });
       }
     };
     const onKey = (e: KeyboardEvent): void => {
@@ -416,12 +416,13 @@ export function DayView(props: DayViewProps) {
                 key={b.id}
                 draggable={!isGcal && !isResizingThis}
                 onDragStart={(e) => handleBlockDragStart(e, b)}
-                onDoubleClick={(e) => {
+                onContextMenu={(e) => {
+                  e.preventDefault();
                   e.stopPropagation();
                   openBlockEdit(b);
                 }}
                 onMouseDown={(e) => { if (isGcal) e.stopPropagation(); }}
-                title={isGcal ? `${b.label}\n(Google Calendar の予定 — ダブルクリックで案件割当)` : 'ダブルクリックで編集 / 下端ドラッグでリサイズ'}
+                title={isGcal ? `${b.label}\n(Google Calendar の予定 — 右クリックで案件割当)` : '右クリックで編集 / 下端ドラッグでリサイズ'}
                 className={cn(
                   'absolute rounded-lg overflow-hidden text-foreground transition-[box-shadow,transform] duration-150 shadow-soft',
                   isGcal ? 'cursor-default' : 'cursor-grab hover:shadow-floaty hover:-translate-y-px',

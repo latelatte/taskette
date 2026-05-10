@@ -16,30 +16,33 @@ type Group = {
 
 const SHORTCUTS: readonly Group[] = [
   {
-    category: 'ビュー切替',
+    category: 'ビュー / 移動',
     entries: [
       { keys: ['1'], description: '日ビュー' },
       { keys: ['2'], description: '週ビュー' },
       { keys: ['3'], description: '月ビュー' },
       { keys: ['4'], description: '年ビュー' },
-    ],
-  },
-  {
-    category: 'ナビゲーション',
-    entries: [
       { keys: ['←'], description: '前のページ' },
       { keys: ['→'], description: '次のページ' },
       { keys: ['T'], description: '今日へジャンプ' },
+      { keys: ['['], description: 'サイドバーを切替' },
     ],
   },
   {
-    category: 'パネル / ダイアログ',
+    category: 'ダイアログ',
     entries: [
-      { keys: ['['], description: 'サイドバーを切替' },
+      { keys: ['G'], description: '配分提案を開く (日 / 週ビューのみ)' },
       { keys: ['S'], description: 'サマリーを開く' },
       { keys: [cmdSym, ','], description: '設定を開く' },
       { keys: ['?'], description: 'このヘルプを開く' },
       { keys: ['Esc'], description: '開いているダイアログを閉じる' },
+    ],
+  },
+  {
+    category: '編集',
+    entries: [
+      { keys: [cmdSym, 'Z'], description: '元に戻す (Undo)' },
+      { keys: [cmdSym, '⇧', 'Z'], description: 'やり直し (Redo)' },
     ],
   },
 ];

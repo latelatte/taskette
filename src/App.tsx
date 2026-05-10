@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import type { DateString, GcalAssignment, Project, ProjectEnergy, TaskTemplate, TimeBlock } from './domain/types.js';
 import { Day } from './domain/day.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
@@ -258,6 +258,106 @@ export function App() {
     void saveStore({ blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules });
   }, [loadStatus, blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
 
+  // ----- Undo / Redo -----
+  // Snapshot-based history.
+  //
+  // lastSnapshotRef tracks the "expected" current snapshot. We update it
+  // synchronously in restoreSnapshot (so that rapid undo→redo chains see fresh
+  // values before React commits) and again in the post-render effect when a
+  // user-driven change is detected.
+  //
+  // The effect compares the just-rendered state against lastSnapshotRef:
+  //   - same reference (states are immutable) → no-op (this is either the
+  //     initial render after a restore, or a render that didn't touch any
+  //     undoable state)
+  //   - differs → user-driven change: push last onto undoStack, clear redo,
+  //     update lastSnapshotRef.
+  //
+  // Assumes the 5 setters in restoreSnapshot batch into one render
+  // (true under React 18+ event handler / async batching).
+  type UndoSnapshot = {
+    readonly blocksByDate: Record<DateString, readonly TimeBlock[]>;
+    readonly projects: readonly Project[];
+    readonly templates: readonly TaskTemplate[];
+    readonly gcalAssignments: Record<string, GcalAssignment>;
+    readonly gcalSummaryRules: Record<string, { projectId?: string; hidden?: true }>;
+  };
+  const HISTORY_LIMIT = 100;
+  const undoStackRef = useRef<UndoSnapshot[]>([]);
+  const redoStackRef = useRef<UndoSnapshot[]>([]);
+  const lastSnapshotRef = useRef<UndoSnapshot | null>(null);
+  // Create-then-edit flow: blocks created via drop/drag/double-click auto-open
+  // the edit dialog. The subsequent first save should NOT push a separate
+  // history entry — it should merge into the create. Otherwise a
+  // create→save-without-edit produces two visually-identical history entries
+  // (#1 create with default values, #2 save with same values), and the user
+  // sees a "no-op" first undo.
+  const inCreateEditFlowRef = useRef(false);
+  const coalesceNextChangeRef = useRef(false);
+
+  useEffect(() => {
+    if (loadStatus !== 'ready') return;
+    const cur: UndoSnapshot = { blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules };
+    const last = lastSnapshotRef.current;
+    if (last === null) {
+      lastSnapshotRef.current = cur;
+      return;
+    }
+    if (
+      last.blocksByDate === cur.blocksByDate &&
+      last.projects === cur.projects &&
+      last.templates === cur.templates &&
+      last.gcalAssignments === cur.gcalAssignments &&
+      last.gcalSummaryRules === cur.gcalSummaryRules
+    ) return;
+    if (coalesceNextChangeRef.current) {
+      // Don't push 'last' onto undoStack — the existing top is already the
+      // pre-create snapshot, which is the correct undo target.
+      coalesceNextChangeRef.current = false;
+      redoStackRef.current = [];
+      lastSnapshotRef.current = cur;
+      return;
+    }
+    undoStackRef.current.push(last);
+    if (undoStackRef.current.length > HISTORY_LIMIT) undoStackRef.current.shift();
+    redoStackRef.current = [];
+    lastSnapshotRef.current = cur;
+  }, [loadStatus, blocksByDate, projects, templates, gcalAssignments, gcalSummaryRules]);
+
+  const restoreSnapshot = (s: UndoSnapshot): void => {
+    // Update synchronously so back-to-back undo/redo see the destination, not
+    // the not-yet-committed prior value.
+    lastSnapshotRef.current = s;
+    setBlocksByDate(s.blocksByDate);
+    setProjects(s.projects);
+    setTemplates(s.templates);
+    setGcalAssignments(s.gcalAssignments);
+    setGcalSummaryRules(s.gcalSummaryRules);
+    setError(null);
+    if (blockEdit !== null) setBlockEdit(null);
+  };
+
+  const undo = (): void => {
+    const prev = undoStackRef.current.pop();
+    if (prev === undefined) return;
+    const cur = lastSnapshotRef.current;
+    if (cur !== null) redoStackRef.current.push(cur);
+    restoreSnapshot(prev);
+  };
+
+  const redo = (): void => {
+    const next = redoStackRef.current.pop();
+    if (next === undefined) return;
+    const cur = lastSnapshotRef.current;
+    if (cur !== null) undoStackRef.current.push(cur);
+    restoreSnapshot(next);
+  };
+
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+  const redoRef = useRef(redo);
+  redoRef.current = redo;
+
   useNotificationScheduler(blocksByDate);
 
   useEffect(() => {
@@ -286,6 +386,18 @@ export function App() {
         e.preventDefault();
         setSettingsView('menu');
         setShowSettings(true);
+        return;
+      }
+      // Undo: Cmd/Ctrl+Z, Redo: Cmd/Ctrl+Shift+Z (or Ctrl+Y on Win/Linux)
+      if (cmdOrCtrl && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) redoRef.current();
+        else undoRef.current();
+        return;
+      }
+      if (cmdOrCtrl && !e.metaKey && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redoRef.current();
         return;
       }
 
@@ -323,6 +435,13 @@ export function App() {
         case 's':
         case 'S':
           setShowSummary(true);
+          break;
+        case 'g':
+        case 'G':
+          if (viewMode === 'day' || viewMode === 'week') {
+            e.preventDefault();
+            runProposalRef.current();
+          }
           break;
         case '?':
           setShowKeyboardHelp(true);
@@ -367,11 +486,12 @@ export function App() {
 
   const pinnedProjects = useMemo(() => projects.filter((p) => p.pinned), [projects]);
 
-  const openBlockEdit = (block: TimeBlock): void => {
+  const openBlockEdit = (block: TimeBlock, opts?: { justCreated?: boolean }): void => {
     const isGcal = block.source === 'gcal';
     // GCal block を開いた時、個別 assignment が既にある場合のみ OFF (個別設定を維持)、それ以外はデフォルト ON
     const hasIndividualAssignment = isGcal && block.gcalKey !== undefined && gcalAssignments[block.gcalKey] !== undefined;
     setEditApplyToAllSameSummary(isGcal && !hasIndividualAssignment);
+    inCreateEditFlowRef.current = opts?.justCreated === true;
     setBlockEdit({
       blockId: block.id,
       label: block.label,
@@ -386,6 +506,8 @@ export function App() {
   };
 
   const closeBlockEdit = (): void => {
+    // Cancel/Esc: don't coalesce — the create entry stays in history alone.
+    inCreateEditFlowRef.current = false;
     setBlockEdit(null);
     setError(null);
   };
@@ -492,6 +614,11 @@ export function App() {
       return;
     }
 
+    if (inCreateEditFlowRef.current) {
+      // First save after auto-open from create: merge with the create entry.
+      coalesceNextChangeRef.current = true;
+      inCreateEditFlowRef.current = false;
+    }
     setBlocks(day.blocks);
     setError(null);
     setBlockEdit(null);
@@ -499,6 +626,8 @@ export function App() {
 
   const deleteBlockFromEdit = (): void => {
     if (blockEdit === null) return;
+    // Explicit delete is its own action; never coalesce with the create.
+    inCreateEditFlowRef.current = false;
     setBlocks((prev) => prev.filter((b) => b.id !== blockEdit.blockId));
     setError(null);
     setBlockEdit(null);
@@ -718,6 +847,8 @@ export function App() {
       runProposalForDates([currentDate]);
     }
   };
+  const runProposalRef = useRef(runProposal);
+  runProposalRef.current = runProposal;
 
   const toggleProposalReject = (key: string): void => {
     setProposal((prev) => {
@@ -1089,7 +1220,7 @@ export function App() {
               variant="ghost"
               size="icon-sm"
               onClick={runProposal}
-              title={viewMode === 'week' ? '今週 (月-金) の配分を提案' : 'この日の配分を提案'}
+              title={`${viewMode === 'week' ? '今週 (月-金) の配分を提案' : 'この日の配分を提案'} (G)`}
               aria-label="配分提案"
             >
               <Sparkles />
