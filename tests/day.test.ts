@@ -15,12 +15,12 @@ describe('Day.place', () => {
     expect(day.blocks).toHaveLength(1);
   });
 
-  it('rejects an overlapping block and reports the conflicting id', () => {
+  it('allows overlapping blocks (rendered side-by-side by the view)', () => {
     const day = new Day('2026-05-09');
     day.place(block({ id: 'a', start: 540, durationMin: 60 }));
     const result = day.place(block({ id: 'b', start: 570, durationMin: 30 }));
-    expect(result).toEqual({ ok: false, reason: 'overlap', conflictingBlockId: 'a' });
-    expect(day.blocks).toHaveLength(1);
+    expect(result).toEqual({ ok: true });
+    expect(day.blocks).toHaveLength(2);
   });
 
   it('allows adjacent blocks (touching, not overlapping)', () => {
@@ -94,12 +94,13 @@ describe('Day.move', () => {
     expect(day.move('a', 540)).toEqual({ ok: true });
   });
 
-  it('rejects a move that overlaps another block', () => {
+  it('allows a move that overlaps another block', () => {
     const day = new Day('2026-05-09');
     day.place(block({ id: 'a', start: 540, durationMin: 60 }));
     day.place(block({ id: 'b', start: 720, durationMin: 30 }));
     const result = day.move('a', 700);
-    expect(result).toEqual({ ok: false, reason: 'overlap', conflictingBlockId: 'b' });
+    expect(result).toEqual({ ok: true });
+    expect(day.blocks.find((b) => b.id === 'a')?.start).toBe(700);
   });
 
   it('rejects a move that pushes the block past end of day', () => {
@@ -129,12 +130,13 @@ describe('Day.resize', () => {
     expect(day.blocks[0]?.durationMin).toBe(120);
   });
 
-  it('rejects a resize that overlaps the next block', () => {
+  it('allows a resize that overlaps the next block', () => {
     const day = new Day('2026-05-09');
     day.place(block({ id: 'a', start: 540, durationMin: 60 }));
     day.place(block({ id: 'b', start: 660, durationMin: 30 }));
     const result = day.resize('a', 180);
-    expect(result).toEqual({ ok: false, reason: 'overlap', conflictingBlockId: 'b' });
+    expect(result).toEqual({ ok: true });
+    expect(day.blocks.find((b) => b.id === 'a')?.durationMin).toBe(180);
   });
 
   it('rejects a non-positive duration', () => {
@@ -165,13 +167,11 @@ describe('Day constructor with initial blocks', () => {
     expect(day.blocks).toHaveLength(2);
   });
 
-  it('throws when initial blocks overlap', () => {
-    expect(
-      () =>
-        new Day('2026-05-09', [
-          block({ id: 'a', start: 540, durationMin: 60 }),
-          block({ id: 'b', start: 570, durationMin: 30 }),
-        ]),
-    ).toThrow();
+  it('accepts overlapping initial blocks', () => {
+    const day = new Day('2026-05-09', [
+      block({ id: 'a', start: 540, durationMin: 60 }),
+      block({ id: 'b', start: 570, durationMin: 30 }),
+    ]);
+    expect(day.blocks).toHaveLength(2);
   });
 });

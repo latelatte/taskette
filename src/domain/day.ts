@@ -4,12 +4,12 @@ const MINUTES_PER_DAY = 1440;
 
 const endOf = (b: TimeBlock): MinuteOfDay => b.start + b.durationMin;
 
-const overlaps = (a: TimeBlock, b: TimeBlock): boolean =>
-  a.start < endOf(b) && b.start < endOf(a);
-
 const fitsWithinDay = (b: TimeBlock): boolean =>
   b.start >= 0 && endOf(b) <= MINUTES_PER_DAY;
 
+// Overlap is intentionally allowed: users sometimes need to record a primary
+// commitment (e.g., a passive meeting) alongside an actual task done in
+// parallel. The view layer renders overlapping blocks side-by-side.
 export class Day {
   readonly date: DateString;
   private _blocks: TimeBlock[];
@@ -42,9 +42,6 @@ export class Day {
       if (existing.id === block.id) {
         return { ok: false, reason: 'invalid', message: `id collision: ${block.id}` };
       }
-      if (overlaps(existing, block)) {
-        return { ok: false, reason: 'overlap', conflictingBlockId: existing.id };
-      }
     }
     this._blocks.push(block);
     return { ok: true };
@@ -67,12 +64,6 @@ export class Day {
     if (!fitsWithinDay(moved)) {
       return { ok: false, reason: 'invalid', message: 'block does not fit within the day' };
     }
-    for (const existing of this._blocks) {
-      if (existing.id === id) continue;
-      if (overlaps(existing, moved)) {
-        return { ok: false, reason: 'overlap', conflictingBlockId: existing.id };
-      }
-    }
     this._blocks[i] = moved;
     return { ok: true };
   }
@@ -89,12 +80,6 @@ export class Day {
     const resized: TimeBlock = { ...target, durationMin: newDuration };
     if (!fitsWithinDay(resized)) {
       return { ok: false, reason: 'invalid', message: 'block does not fit within the day' };
-    }
-    for (const existing of this._blocks) {
-      if (existing.id === id) continue;
-      if (overlaps(existing, resized)) {
-        return { ok: false, reason: 'overlap', conflictingBlockId: existing.id };
-      }
     }
     this._blocks[i] = resized;
     return { ok: true };

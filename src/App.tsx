@@ -606,11 +606,7 @@ export function App() {
     const day = new Day(currentDate, others);
     const result = day.place(newBlock);
     if (!result.ok) {
-      if (result.reason === 'overlap') {
-        setError('重なっていますわ — 他のブロックと衝突しています');
-      } else {
-        setError(result.message);
-      }
+      setError(result.message);
       return;
     }
 

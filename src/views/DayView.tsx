@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { Calendar as CalendarIcon } from 'lucide-react';
 import { Day } from '../domain/day.js';
 import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from '../domain/types.js';
@@ -13,12 +13,57 @@ const DEFAULT_LABEL = '新規ブロック';
 const FALLBACK_BLOCK_COLOR = '#A39A92';
 const MIN_DRAG_DURATION = 15;
 const TIME_GUTTER_PX = 56;
+const LANE_GAP_PX = 2;
 const INITIAL_SCROLL_HOUR = 8; // 仕事時間 (9-18) の少し手前にスクロール開始
 
 const pad2 = (n: number): string => n.toString().padStart(2, '0');
 const formatMinute = (m: number): string => `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
 const snapMinutes = (mins: number): MinuteOfDay =>
   Math.round(Math.max(0, mins) / SNAP_MIN) * SNAP_MIN;
+
+type LaidOutBlock = TimeBlock & { readonly laneIndex: number; readonly laneCount: number };
+
+// Group blocks into transitively-overlapping clusters, then greedily assign
+// each block to the leftmost lane whose previous occupant has already ended.
+// All blocks in a cluster share the same laneCount (cluster width), so the
+// view can render them side-by-side at equal width.
+const layoutBlocks = (blocks: readonly TimeBlock[]): readonly LaidOutBlock[] => {
+  if (blocks.length === 0) return [];
+  const sorted = [...blocks].sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    return (b.start + b.durationMin) - (a.start + a.durationMin); // longer first
+  });
+  const result: LaidOutBlock[] = [];
+  let cluster: TimeBlock[] = [];
+  let clusterEnd = -1;
+  const flush = (): void => {
+    if (cluster.length === 0) return;
+    const laneEnds: number[] = [];
+    const lanes = new Map<string, number>();
+    for (const b of cluster) {
+      let lane = laneEnds.findIndex((end) => b.start >= end);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(0);
+      }
+      laneEnds[lane] = b.start + b.durationMin;
+      lanes.set(b.id, lane);
+    }
+    const laneCount = laneEnds.length;
+    for (const b of cluster) {
+      result.push({ ...b, laneIndex: lanes.get(b.id)!, laneCount });
+    }
+    cluster = [];
+    clusterEnd = -1;
+  };
+  for (const b of sorted) {
+    if (cluster.length > 0 && b.start >= clusterEnd) flush();
+    cluster.push(b);
+    clusterEnd = Math.max(clusterEnd, b.start + b.durationMin);
+  }
+  flush();
+  return result;
+};
 
 type DragCreateState = {
   readonly startMin: MinuteOfDay;
@@ -30,7 +75,6 @@ type ResizeState = {
   readonly start: MinuteOfDay;
   readonly originalDuration: number;
   readonly currentDuration: number;
-  readonly overlaps: boolean;
 };
 
 type DayViewProps = {
@@ -61,6 +105,7 @@ export function DayView(props: DayViewProps) {
     return d.getHours() * 60 + d.getMinutes();
   });
   const isToday = currentDate === today();
+  const laidOutBlocks = useMemo(() => layoutBlocks(blocks), [blocks]);
 
   // 初期スクロール位置: 通常は 8 時、今日なら現時刻の 1 時間前を表示
   useEffect(() => {
@@ -100,7 +145,7 @@ export function DayView(props: DayViewProps) {
     return FALLBACK_BLOCK_COLOR;
   };
 
-  const applyPlace = (newBlock: TimeBlock, snappedForError: MinuteOfDay): boolean => {
+  const applyPlace = (newBlock: TimeBlock): boolean => {
     const day = new Day(currentDate, blocks);
     const result = day.place(newBlock);
     if (result.ok) {
@@ -108,11 +153,7 @@ export function DayView(props: DayViewProps) {
       setError(null);
       return true;
     }
-    if (result.reason === 'overlap') {
-      setError(`重なっていますわ — ${formatMinute(snappedForError)} は他のブロックと衝突しています`);
-    } else {
-      setError(result.message);
-    }
+    setError(result.message);
     return false;
   };
 
@@ -124,8 +165,6 @@ export function DayView(props: DayViewProps) {
     if (result.ok) {
       setBlocks(day.blocks);
       setError(null);
-    } else if (result.reason === 'overlap') {
-      setError(`移動できませんでしたわ — ${formatMinute(newStart)} で他のブロックと衝突しています`);
     } else {
       setError(result.message);
     }
@@ -139,11 +178,7 @@ export function DayView(props: DayViewProps) {
       setError(null);
       return true;
     }
-    if (result.reason === 'overlap') {
-      setError('伸ばせませんでしたわ — 他のブロックと衝突します');
-    } else {
-      setError(result.message);
-    }
+    setError(result.message);
     return false;
   };
 
@@ -182,7 +217,7 @@ export function DayView(props: DayViewProps) {
         durationMin: 60,
         projectId,
       };
-      if (applyPlace(newBlock, snapped)) {
+      if (applyPlace(newBlock)) {
         openBlockEdit(newBlock, { justCreated: true });
       }
     } else if (kind === 'block') {
@@ -201,7 +236,7 @@ export function DayView(props: DayViewProps) {
       start: minute,
       durationMin: FREEFORM_DEFAULT_DURATION,
     };
-    if (applyPlace(newBlock, minute)) {
+    if (applyPlace(newBlock)) {
       openBlockEdit(newBlock, { justCreated: true });
     }
   };
@@ -250,7 +285,6 @@ export function DayView(props: DayViewProps) {
       start: block.start,
       originalDuration: block.durationMin,
       currentDuration: block.durationMin,
-      overlaps: false,
     });
   };
 
@@ -261,13 +295,9 @@ export function DayView(props: DayViewProps) {
       if (cur === null) return;
       const endMin = snapMinutes(yToMinute(e.clientY));
       const rawDuration = endMin - cur.start;
-      const others = blocksRef.current.filter((b) => b.id !== cur.id);
-      const wallMin = others
-        .filter((blk) => blk.start >= cur.start)
-        .reduce((acc, blk) => Math.min(acc, blk.start), 1440);
-      const maxDuration = wallMin - cur.start;
+      const maxDuration = 1440 - cur.start;
       const clamped = Math.max(MIN_DRAG_DURATION, Math.min(maxDuration, rawDuration));
-      setResize((prev) => (prev === null ? null : { ...prev, currentDuration: clamped, overlaps: false }));
+      setResize((prev) => (prev === null ? null : { ...prev, currentDuration: clamped }));
     };
     const onUp = (): void => {
       const cur = resizeRef.current;
@@ -309,7 +339,7 @@ export function DayView(props: DayViewProps) {
         start: a,
         durationMin: duration,
       };
-      if (applyPlaceRef.current(newBlock, a)) {
+      if (applyPlaceRef.current(newBlock)) {
         openBlockEditRef.current(newBlock, { justCreated: true });
       }
     };
@@ -332,10 +362,7 @@ export function DayView(props: DayViewProps) {
     const b = Math.max(dragCreate.startMin, dragCreate.currentMin);
     const duration = b - a;
     if (duration < MIN_DRAG_DURATION) return null;
-    const overlaps = blocks.some(
-      (blk) => a < blk.start + blk.durationMin && blk.start < b,
-    );
-    return { a, b, duration, overlaps };
+    return { a, b, duration };
   })();
 
   return (
@@ -403,7 +430,7 @@ export function DayView(props: DayViewProps) {
           ))}
 
           {/* Blocks */}
-          {blocks.map((b) => {
+          {laidOutBlocks.map((b) => {
             const color = blockColor(b);
             const isGcal = b.source === 'gcal';
             const isResizingThis = resize !== null && resize.id === b.id;
@@ -411,6 +438,15 @@ export function DayView(props: DayViewProps) {
             const topPx = b.start * PX_PER_MIN;
             const heightPx = effectiveDuration * PX_PER_MIN;
             const timeLabel = `${formatMinute(b.start)} – ${formatMinute(b.start + effectiveDuration)}`;
+            const singleLane = b.laneCount === 1;
+            // Multi-lane: split the available area (between left:8 and right:16)
+            // into equal columns with a small visual gap between them.
+            const positionStyle = singleLane
+              ? { left: '8px', right: '16px' }
+              : {
+                  left: `calc(8px + (100% - 24px) * ${b.laneIndex / b.laneCount})`,
+                  width: `calc((100% - 24px) / ${b.laneCount} - ${LANE_GAP_PX}px)`,
+                };
             return (
               <div
                 key={b.id}
@@ -430,8 +466,7 @@ export function DayView(props: DayViewProps) {
                 )}
                 style={{
                   top: `${topPx}px`,
-                  left: '8px',
-                  right: '16px',
+                  ...positionStyle,
                   height: `${heightPx}px`,
                   background: isGcal ? `${color}14` : `${color}26`,
                   border: isGcal ? `1.5px dashed ${color}80` : `1px solid ${color}40`,
@@ -522,10 +557,7 @@ export function DayView(props: DayViewProps) {
             <div
               className={cn(
                 'absolute rounded-lg px-2 py-1 text-[11px] font-semibold pointer-events-none z-10',
-                'border-2 border-dashed',
-                dragPreview.overlaps
-                  ? 'bg-destructive/15 border-destructive text-destructive'
-                  : 'bg-primary/12 border-primary text-primary',
+                'border-2 border-dashed bg-primary/12 border-primary text-primary',
               )}
               style={{
                 top: `${dragPreview.a * PX_PER_MIN}px`,
@@ -535,7 +567,6 @@ export function DayView(props: DayViewProps) {
               }}
             >
               {formatMinute(dragPreview.a)} – {formatMinute(dragPreview.b)} ({dragPreview.duration}分)
-              {dragPreview.overlaps && <span className="ml-1.5">⚠ 重なり</span>}
             </div>
           )}
         </div>

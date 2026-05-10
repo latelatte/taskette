@@ -44,5 +44,4 @@ export type GcalAssignment = {
 
 export type PlaceResult =
   | { ok: true }
-  | { ok: false; reason: 'overlap'; conflictingBlockId: string }
   | { ok: false; reason: 'invalid'; message: string };
