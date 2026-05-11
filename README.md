@@ -59,8 +59,16 @@ Web 版は OAuth Implicit Flow (popup, 1 時間で再認証) のみ。永続的�
 
 ```bash
 npm install
-npm run tauri:dev   # 開発モード
-npm run tauri:build # .app/.dmg を生成
+npm run tauri:dev   # 開発モード (HMR、デバッグ用)
+npm run tauri:build # 本番ビルド (.app + .dmg を生成)
+```
+
+ビルド成果物:
+
+```
+src-tauri/target/release/bundle/
+├── macos/Taskette.app                       # アプリ本体
+└── dmg/Taskette_<version>_aarch64.dmg       # インストーラ
 ```
 
 GCal 連携には Web client に加えて **Desktop client** が要る:
@@ -71,6 +79,16 @@ VITE_GOOGLE_DESKTOP_CLIENT_SECRET=<your_desktop_client_secret>
 ```
 
 Desktop client + PKCE でも Google の token endpoint は client_secret を要求するので必須。Authorization Code Flow + loopback 127.0.0.1 random port で popup なし、refresh token は macOS Keychain に保存される。
+
+### Mac へのインストール
+
+`.app` を `/Applications` にコピー (Finder で D&D、または `cp -r src-tauri/target/release/bundle/macos/Taskette.app /Applications/`)。`.dmg` を Finder で開いて Applications フォルダにドラッグでも可。
+
+初回起動時の挙動:
+
+1. **「開発元未確認」警告** — ad-hoc 署名 (`signingIdentity: "-"`) のため Apple Notarization なし。Finder で `Taskette.app` を **右クリック → 開く → 「開く」** で 1 回だけ承認すれば以降は素通り。
+2. **通知の許可ダイアログ** — `tauri-plugin-notification` 経由で macOS に通知許可を要求。「許可」を選べばタスク開始 N 分前の通知が動く。
+3. **Keychain アクセス許可** (GCal 接続時) — refresh token を `ai.latelatte.taskette.google` という Service 名で Keychain に保存。「常に許可」で permanent、「許可」だと毎回確認。
 
 ### Browser → Tauri データ移行
 
@@ -114,6 +132,13 @@ tests/         # vitest
 - **GCal は read-only**: GCal → taskette の取り込みのみ。書き込みは未実装 (検討中)。
 - **Browser localStorage は移行用**: 実用は Tauri + SQLite を前提。Browser 版はデザイン QA とデータ移行元のための preview。
 - **テンプレート機構は UI 凍結**: DB schema と既存ブロックの色解決のために残しているが、新規追加 UI は外している。
+
+## ステータス
+
+- 動作確認済プラットフォーム: **macOS (Apple Silicon)**
+- Windows / Linux / Intel Mac は未検証 (Tauri クロスプラットフォームなので動く可能性は高いが未確認)
+- 公式配布バイナリは未配布。各自 `tauri:build` で生成してください
+- Apple Developer 署名・公証 (Notarization) は未対応 (公式配布する時のみ必要)
 
 ## License
 
