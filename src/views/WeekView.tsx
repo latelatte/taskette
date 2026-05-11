@@ -1,10 +1,14 @@
 import { useMemo } from 'react';
 import type { DateString, Project, TaskTemplate, TimeBlock } from '../domain/types.js';
-import { daysOfWeek, today } from '../dates.js';
+import { aggregateDaily } from '../domain/aggregate.js';
+import { daysOfWeek, formatJaDate, today } from '../dates.js';
 import { cn } from '../lib/utils.js';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip.js';
+import { ActualBreakdown } from './ActualBreakdown.js';
 
 const PX_PER_MIN = 0.5;
 const FALLBACK_BLOCK_COLOR = '#A39A92';
+const UNASSIGNED_COLOR = '#B5B0A8';
 const WEEKDAY_LABELS = ['月', '火', '水', '木', '金', '土', '日'] as const;
 const TIME_GUTTER_PX = 56;
 
@@ -13,14 +17,30 @@ const pad2 = (n: number): string => n.toString().padStart(2, '0');
 type Props = {
   readonly currentDate: DateString;
   readonly blocksByDate: Record<DateString, readonly TimeBlock[]>;
+  readonly projects: readonly Project[];
   readonly projectById: ReadonlyMap<string, Project>;
   readonly templateById?: ReadonlyMap<string, TaskTemplate>;
   readonly onDayClick: (date: DateString) => void;
 };
 
-export function WeekView({ currentDate, blocksByDate, projectById, templateById, onDayClick }: Props) {
+export function WeekView({ currentDate, blocksByDate, projects, projectById, templateById, onDayClick }: Props) {
   const days = useMemo(() => daysOfWeek(currentDate), [currentDate]);
   const todayStr = today();
+  const dailyActuals = useMemo(() => days.map((d) => {
+    const agg = aggregateDaily(blocksByDate, d);
+    const assignedMin = Array.from(agg.byProject.values()).reduce((a, b) => a + b, 0);
+    const totalMin = assignedMin + agg.unassigned;
+    const segments: { color: string; min: number }[] = [];
+    for (const p of projects) {
+      const m = agg.byProject.get(p.id) ?? 0;
+      if (m > 0) segments.push({ color: p.color, min: m });
+    }
+    for (const [pid, m] of agg.byProject) {
+      if (!projectById.has(pid) && m > 0) segments.push({ color: FALLBACK_BLOCK_COLOR, min: m });
+    }
+    if (agg.unassigned > 0) segments.push({ color: UNASSIGNED_COLOR, min: agg.unassigned });
+    return { date: d, totalMin, segments, aggregate: agg };
+  }), [days, blocksByDate, projects, projectById]);
 
   const blockColor = (b: TimeBlock): string => {
     if (b.projectId !== undefined) {
@@ -36,45 +56,99 @@ export function WeekView({ currentDate, blocksByDate, projectById, templateById,
 
   return (
     <div className="flex-1 overflow-auto bg-background flex flex-col">
-      <div
-        className="grid sticky top-0 z-10 bg-card/90 backdrop-blur-sm border-b"
-        style={{ gridTemplateColumns: `${TIME_GUTTER_PX}px repeat(7, 1fr)` }}
-      >
-        <div className="border-r border-border/60" />
-        {days.map((d, i) => {
-          const isToday = d === todayStr;
-          const isWeekend = i >= 5;
-          const dayNum = parseInt(d.slice(8, 10), 10);
-          return (
-            <button
-              key={d}
-              onClick={() => onDayClick(d)}
-              className={cn(
-                'border-none px-1 py-2 text-center text-[11px] font-semibold cursor-pointer transition-colors',
-                i < 6 && 'border-r border-border/60',
-                isToday
-                  ? 'bg-primary/8 text-primary'
-                  : isWeekend
-                    ? 'text-muted-foreground/70 hover:bg-accent/40'
-                    : 'text-muted-foreground hover:bg-accent/40',
-              )}
-            >
-              <div>{WEEKDAY_LABELS[i]}</div>
-              <div
+      <div className="sticky top-0 z-10 bg-card/90 backdrop-blur-sm border-b">
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: `${TIME_GUTTER_PX}px repeat(7, 1fr)` }}
+        >
+          <div className="border-r border-border/60" />
+          {days.map((d, i) => {
+            const isToday = d === todayStr;
+            const isWeekend = i >= 5;
+            const dayNum = parseInt(d.slice(8, 10), 10);
+            return (
+              <button
+                key={d}
+                onClick={() => onDayClick(d)}
                 className={cn(
-                  'text-sm mt-0.5 font-semibold',
+                  'border-none px-1 py-2 text-center text-[11px] font-semibold cursor-pointer transition-colors',
+                  i < 6 && 'border-r border-border/60',
                   isToday
-                    ? 'text-primary'
+                    ? 'bg-primary/8 text-primary'
                     : isWeekend
-                      ? 'text-muted-foreground/70'
-                      : 'text-foreground',
+                      ? 'text-muted-foreground/70 hover:bg-accent/40'
+                      : 'text-muted-foreground hover:bg-accent/40',
                 )}
               >
-                {dayNum}
-              </div>
-            </button>
-          );
-        })}
+                <div>{WEEKDAY_LABELS[i]}</div>
+                <div
+                  className={cn(
+                    'text-sm mt-0.5 font-semibold',
+                    isToday
+                      ? 'text-primary'
+                      : isWeekend
+                        ? 'text-muted-foreground/70'
+                        : 'text-foreground',
+                  )}
+                >
+                  {dayNum}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div
+          className="grid border-t border-border/60 bg-muted/30"
+          style={{ gridTemplateColumns: `${TIME_GUTTER_PX}px repeat(7, 1fr)` }}
+        >
+          <div className="border-r border-border/60 px-2 py-1 text-[10px] tracking-wider text-muted-foreground uppercase font-semibold flex items-center">
+            実績
+          </div>
+          {dailyActuals.map(({ date, totalMin, segments, aggregate }, i) => {
+            const fullScale = Math.max(8 * 60, totalMin);
+            return (
+              <Tooltip key={date}>
+                <TooltipTrigger asChild>
+                  <div
+                    className={cn(
+                      'px-1.5 py-1 flex flex-col gap-1 justify-center cursor-default hover:bg-accent/30 transition-colors',
+                      i < 6 && 'border-r border-border/60',
+                    )}
+                  >
+                    {totalMin > 0 ? (
+                      <>
+                        <span className="text-[11px] font-medium text-foreground/80 text-right tabular-nums">
+                          {(totalMin / 60).toFixed(1)}h
+                        </span>
+                        <div className="h-1 bg-muted rounded-[2px] overflow-hidden flex">
+                          {segments.map((s, idx) => (
+                            <div
+                              key={idx}
+                              style={{
+                                width: `${(s.min / fullScale) * 100}%`,
+                                background: s.color,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground/50 text-right">—</span>
+                    )}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <ActualBreakdown
+                    title={formatJaDate(date)}
+                    aggregate={aggregate}
+                    projects={projects}
+                    projectById={projectById}
+                  />
+                </TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
       </div>
       <div
         className="grid relative flex-1"

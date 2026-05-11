@@ -4,7 +4,8 @@ import { Day } from '../domain/day.js';
 import type { DateString, MinuteOfDay, Project, TaskTemplate, TimeBlock } from '../domain/types.js';
 import { today } from '../dates.js';
 import { cn } from '../lib/utils.js';
-import { DailyActualStrip } from './DailyActualStrip.js';
+import { ActualStrip } from './ActualStrip.js';
+import { aggregateDaily } from '../domain/aggregate.js';
 
 const PX_PER_MIN = 1;
 const SNAP_MIN = 15;
@@ -367,7 +368,11 @@ export function DayView(props: DayViewProps) {
 
   return (
     <>
-      <DailyActualStrip blocksByDate={blocksByDate} currentDate={currentDate} projects={projects} />
+      <ActualStrip
+        aggregate={aggregateDaily(blocksByDate, currentDate)}
+        projects={projects}
+        emptyMessage="本日の登録なし"
+      />
       <div
         ref={scrollContainerRef}
         onDragOver={handleDragOver}

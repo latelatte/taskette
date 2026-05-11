@@ -1,27 +1,27 @@
-import type { DateString, Project, TimeBlock } from '../domain/types.js';
-import { aggregateDaily } from '../domain/aggregate.js';
+import type { Project } from '../domain/types.js';
+import type { Aggregate } from '../domain/aggregate.js';
 
 type Props = {
-  readonly blocksByDate: Record<DateString, readonly TimeBlock[]>;
-  readonly currentDate: DateString;
+  readonly aggregate: Aggregate;
   readonly projects: readonly Project[];
+  readonly emptyMessage?: string;
+  readonly label?: string;
 };
 
-export function DailyActualStrip({ blocksByDate, currentDate, projects }: Props) {
-  const dailyAgg = aggregateDaily(blocksByDate, currentDate);
-  const dailyAssignedMin = Array.from(dailyAgg.byProject.values()).reduce((a, b) => a + b, 0);
-  const dailyTotalMin = dailyAssignedMin + dailyAgg.unassigned;
+export function ActualStrip({ aggregate, projects, emptyMessage = '登録なし', label = '実績' }: Props) {
+  const assignedMin = Array.from(aggregate.byProject.values()).reduce((a, b) => a + b, 0);
+  const totalMin = assignedMin + aggregate.unassigned;
   const projectEntries = projects
-    .map((p) => ({ p, min: dailyAgg.byProject.get(p.id) ?? 0 }))
+    .map((p) => ({ p, min: aggregate.byProject.get(p.id) ?? 0 }))
     .filter(({ min }) => min > 0);
-  const isEmpty = projectEntries.length === 0 && dailyAgg.unassigned === 0;
+  const isEmpty = projectEntries.length === 0 && aggregate.unassigned === 0;
   return (
     <div className="flex items-center gap-3.5 border-b bg-muted/30 px-4 py-1.5 text-xs overflow-auto shrink-0">
       <span className="text-[11px] font-semibold tracking-wide text-muted-foreground shrink-0 uppercase">
-        実績
+        {label}
       </span>
       {isEmpty ? (
-        <span className="text-[11px] text-muted-foreground/70">本日の登録なし</span>
+        <span className="text-[11px] text-muted-foreground/70">{emptyMessage}</span>
       ) : (
         <>
           {projectEntries.map(({ p, min }) => (
@@ -35,15 +35,15 @@ export function DailyActualStrip({ blocksByDate, currentDate, projects }: Props)
               </span>
             </span>
           ))}
-          {dailyAgg.unassigned > 0 && (
+          {aggregate.unassigned > 0 && (
             <span className="text-muted-foreground shrink-0">
-              未割当: {(dailyAgg.unassigned / 60).toFixed(1)}h
+              未割当: {(aggregate.unassigned / 60).toFixed(1)}h
             </span>
           )}
         </>
       )}
       <span className="ml-auto font-semibold text-foreground shrink-0">
-        合計: {(dailyTotalMin / 60).toFixed(1)}h
+        合計: {(totalMin / 60).toFixed(1)}h
       </span>
     </div>
   );

@@ -1193,6 +1193,7 @@ export function App() {
           <WeekView
             currentDate={currentDate}
             blocksByDate={mergedBlocksByDate}
+            projects={projects}
             projectById={projectById}
             onDayClick={(d) => navigateToDate(d, 'day')}
           />
