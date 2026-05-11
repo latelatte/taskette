@@ -1,6 +1,6 @@
 {
   "name": "taskette",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "時間ブロッキング × 月次工数管理デスクトップアプリ (Tauri + React)",
   "main": "index.js",
   "scripts": {
@@ -35,7 +35,9 @@
     "@tailwindcss/vite": "^4.3.0",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-notification": "^2.3.3",
+    "@tauri-apps/plugin-process": "^2.3.0",
     "@tauri-apps/plugin-sql": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.14.0",

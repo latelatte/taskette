@@ -76,6 +76,8 @@ import {
 import { KeyboardHelpDialog } from './components/KeyboardHelpDialog.js';
 import { HelpPanel } from './components/HelpPanel.js';
 import { ReleaseNotesPanel } from './components/ReleaseNotesPanel.js';
+import { UpdatesPanel } from './components/UpdatesPanel.js';
+import { useUpdater } from './updater.js';
 import {
   getNotificationPermission,
   previewSound,
@@ -127,7 +129,7 @@ const NOTIFY_OPTIONS: readonly { readonly value: string; readonly label: string 
   { value: '60', label: '1時間前' },
 ];
 
-type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'gcal-hidden' | 'gcal-rules' | 'data' | 'help' | 'releases';
+type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'gcal-hidden' | 'gcal-rules' | 'data' | 'updates' | 'help' | 'releases';
 
 const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
@@ -137,6 +139,7 @@ const SETTINGS_TITLES: Record<SettingsView, string> = {
   'gcal-hidden': '非表示中のイベント',
   'gcal-rules': '同名予定ルール',
   data: 'データ移行',
+  updates: 'アップデート',
   help: '使い方',
   releases: 'リリースノート',
 };
@@ -195,6 +198,7 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>('menu');
   const [settingsSearch, setSettingsSearch] = useState('');
+  const updater = useUpdater(true);
   const [showSummary, setShowSummary] = useState(false);
   const [proposal, setProposal] = useState<{
     drafts: readonly ProposedBlock[];
@@ -1610,6 +1614,7 @@ export function App() {
                 { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算、ピン留め、負荷' },
                 { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
                 { key: 'data' as const, label: 'データ移行', desc: 'ブラウザ localStorage から JSON で取り込み（上書き）' },
+                { key: 'updates' as const, label: 'アップデート', desc: `現在 v${updater.appVersion ?? '—'}・新しいバージョンを確認` },
                 { key: 'help' as const, label: '使い方', desc: '基本操作とショートカットの早見表' },
                 { key: 'releases' as const, label: 'リリースノート', desc: 'バージョンごとの変更点' },
               ].map((item) => (
@@ -1620,7 +1625,14 @@ export function App() {
                   className="flex items-center justify-between gap-3 px-3.5 py-3 bg-card border border-border rounded-md cursor-pointer text-left text-foreground transition-colors hover:bg-accent/40 hover:border-border"
                 >
                   <div>
-                    <div className="text-[13px] font-semibold">{item.label}</div>
+                    <div className="text-[13px] font-semibold flex items-center gap-2">
+                      <span>{item.label}</span>
+                      {item.key === 'updates' && updater.hasUpdate && (
+                        <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                          更新あり
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-muted-foreground mt-0.5">{item.desc}</div>
                   </div>
                   <ChevronRight className="size-4 text-muted-foreground" />
@@ -2191,6 +2203,8 @@ export function App() {
               )}
             </div>
           )}
+
+          {settingsView === 'updates' && <UpdatesPanel updater={updater} />}
 
           {settingsView === 'help' && (
             <HelpPanel onOpenShortcuts={() => {

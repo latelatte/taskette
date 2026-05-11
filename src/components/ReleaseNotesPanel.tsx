@@ -6,6 +6,15 @@ type Release = {
 
 const RELEASES: readonly Release[] = [
   {
+    version: '0.3.0',
+    date: '2026-05-11',
+    highlights: [
+      'アプリ内アップデート機能を追加。GitHub Releases から自動で最新版を取得',
+      '起動時に裏で更新確認、設定 > アップデートから手動チェックも可能',
+      'ダウンロード進捗バーと「再起動で適用」フロー、署名検証付き',
+    ],
+  },
+  {
     version: '0.2.0',
     date: '2026-05-11',
     highlights: [

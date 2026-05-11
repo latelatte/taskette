@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Taskette",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "ai.latelatte.taskette",
   "build": {
     "frontendDist": "../dist",
@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,6 +43,14 @@
     },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDRUZCRjk0QkZDNzY4NzMKUldSemFNZS9sTC92L0Z1dXprQTU5Mk9uRGpLbjIrV3g4N2x5N3VwZVlIMm53RTg4M0hGWFA5ejIK",
+      "endpoints": [
+        "https://github.com/latelatte/taskette/releases/latest/download/latest.json"
+      ]
     }
   }
 }
