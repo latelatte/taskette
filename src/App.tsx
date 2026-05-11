@@ -1,5 +1,25 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { DateString, GcalAssignment, Project, ProjectEnergy, TaskTemplate, TimeBlock } from './domain/types.js';
+import { isProjectActiveInMonth } from './domain/types.js';
 import { Day } from './domain/day.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
 import { addDays, addMonths, businessDaysRemainingInMonth, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
@@ -20,8 +40,10 @@ import { mergeDayBlocks } from './gcal/merge.js';
 import {
   BarChart3,
   Bell,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  GripVertical,
   Keyboard,
   PanelLeftClose,
   PanelLeftOpen,
@@ -105,16 +127,23 @@ const NOTIFY_OPTIONS: readonly { readonly value: string; readonly label: string 
   { value: '60', label: '1時間前' },
 ];
 
-type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'data' | 'help' | 'releases';
+type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'gcal-hidden' | 'gcal-rules' | 'data' | 'help' | 'releases';
 
 const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
   general: '一般',
   projects: '案件設定',
   gcal: 'Google Calendar 連携',
+  'gcal-hidden': '非表示中のイベント',
+  'gcal-rules': '同名予定ルール',
   data: 'データ移行',
   help: '使い方',
   releases: 'リリースノート',
+};
+
+const settingsParent = (v: SettingsView): SettingsView => {
+  if (v === 'gcal-hidden' || v === 'gcal-rules') return 'gcal';
+  return 'menu';
 };
 
 const ENERGY_LABEL: Record<ProjectEnergy, string> = {
@@ -165,6 +194,7 @@ export function App() {
   const [blockEdit, setBlockEdit] = useState<BlockEditState | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsView, setSettingsView] = useState<SettingsView>('menu');
+  const [settingsSearch, setSettingsSearch] = useState('');
   const [showSummary, setShowSummary] = useState(false);
   const [proposal, setProposal] = useState<{
     drafts: readonly ProposedBlock[];
@@ -184,6 +214,11 @@ export function App() {
     PROJECT_COLOR_PALETTE[0] ?? '#64748b',
   );
   const [colorPickerProjectId, setColorPickerProjectId] = useState<string | null>(null);
+  const [activeDragProjectId, setActiveDragProjectId] = useState<string | null>(null);
+  const [activeSectionExpanded, setActiveSectionExpanded] = useState(true);
+  const [closedSectionExpanded, setClosedSectionExpanded] = useState(false);
+  const closedExpandedBeforeDragRef = useRef<boolean | null>(null);
+  const [addProjectFormOpen, setAddProjectFormOpen] = useState(false);
   const [editingMonthBudgetProjectId, setEditingMonthBudgetProjectId] = useState<string | null>(null);
   const [editingMonthBudgetValue, setEditingMonthBudgetValue] = useState('');
   const [importText, setImportText] = useState('');
@@ -355,6 +390,11 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // Reset settings search whenever the user navigates between settings pages.
+    setSettingsSearch('');
+  }, [settingsView]);
+
+  useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       // 入力欄フォーカス中はショートカット無効
       const target = e.target as HTMLElement | null;
@@ -475,6 +515,13 @@ export function App() {
   };
 
   const pinnedProjects = useMemo(() => projects.filter((p) => p.pinned), [projects]);
+  // Sidebar displays pinned projects active in the currently-viewed month.
+  // Ended projects auto-hide once we navigate past their endDate's month (D&D and
+  // proposals shouldn't target a project that's contractually over).
+  const activeSidebarProjects = useMemo(() => {
+    const ym = yearMonthOf(currentDate);
+    return pinnedProjects.filter((p) => isProjectActiveInMonth(p, ym));
+  }, [pinnedProjects, currentDate]);
 
   const openBlockEdit = (block: TimeBlock, opts?: { justCreated?: boolean }): void => {
     const isGcal = block.source === 'gcal';
@@ -774,6 +821,16 @@ export function App() {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, energy } : p)));
   };
 
+  // Section classification is presence-based, NOT date-based. As soon as the
+  // user drags a project to 終了済, endDate gets stamped and the project moves
+  // sections — regardless of whether that date is in the current month.
+  // The viewed-month filter (isProjectActiveInMonth) stays date-based for
+  // sidebar / summary / proposal visibility.
+  const todayYM = useMemo(() => yearMonthOf(today()), []);
+  const todayDateStr = useMemo(() => today(), []);
+  const isProjectOpen = (p: Project): boolean => p.endDate === undefined;
+
+
   const runProposalForDates = (targetDates: readonly DateString[]): void => {
     if (targetDates.length === 0) {
       setProposal({ drafts: [], rejected: new Set() });
@@ -809,9 +866,12 @@ export function App() {
       for (const d of sortedMonthDates) {
         existingBlocksByDate[d] = mergedBlocksByDate[d] ?? [];
       }
+      // Skip ended projects when proposing into a month after their endDate.
+      const activePinnedForMonth = pinnedProjects.filter((p) => isProjectActiveInMonth(p, ym));
+      if (activePinnedForMonth.length === 0) continue;
       const drafts = proposeAllocation({
         dates: sortedMonthDates,
-        pinnedProjects,
+        pinnedProjects: activePinnedForMonth,
         existingBlocksByDate,
         focusWindows,
         budgetContext: {
@@ -965,6 +1025,15 @@ export function App() {
 
   const isToday = currentDate === today();
 
+  const activeProjects = useMemo(
+    () => projects.filter(isProjectOpen),
+    [projects, todayYM], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const closedProjects = useMemo(
+    () => projects.filter((p) => !isProjectOpen(p)),
+    [projects, todayYM], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const headerDateLabel = ((): string => {
     if (viewMode === 'day') return formatJaDate(currentDate);
     if (viewMode === 'week') {
@@ -976,6 +1045,301 @@ export function App() {
     if (viewMode === 'month') return formatJaYearMonth(yearMonthOf(currentDate));
     return `${yearOf(currentDate)}年`;
   })();
+
+  const renderProjectRowContent = (
+    p: Project,
+    section: 'active' | 'closed',
+    handle?: ReactNode,
+  ): ReactNode => {
+    const pickerOpen = colorPickerProjectId === p.id;
+    const isClosed = section === 'closed';
+    return (
+      <>
+        <div className="flex items-center gap-2">
+          {handle ?? (
+            <span className="shrink-0 w-4 text-muted-foreground/30">
+              <GripVertical className="size-4" />
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setColorPickerProjectId(pickerOpen ? null : p.id)}
+            title="色を変更"
+            aria-label="色を変更"
+            className={cn(
+              'w-[18px] h-[18px] rounded shrink-0 cursor-pointer p-0 transition-shadow',
+              pickerOpen ? 'ring-2 ring-foreground ring-offset-1' : 'border border-foreground/10',
+            )}
+            style={{ background: p.color }}
+          />
+          <Input
+            value={p.name}
+            onChange={(e) => renameProject(p.id, e.currentTarget.value)}
+            placeholder="案件名"
+            className="flex-1 h-8 text-[13px]"
+          />
+          <Input
+            type="number"
+            step={0.05}
+            min={0}
+            value={p.monthlyBudget ?? ''}
+            onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
+            placeholder="人月"
+            title="月予算 (人月)"
+            className="w-[70px] h-8 text-xs"
+          />
+          <Button
+            size="xs"
+            variant="destructive"
+            onClick={() => handleDeleteProject(p.id)}
+          >
+            削除
+          </Button>
+        </div>
+        <div className="flex items-center gap-3 mt-2 pl-7 flex-wrap">
+          <button
+            type="button"
+            onClick={() => toggleProjectPinned(p.id)}
+            title={p.pinned ? 'サイドバーから外す' : 'サイドバーに表示'}
+            aria-label={p.pinned ? 'サイドバーから外す' : 'サイドバーに表示'}
+            className={cn(
+              'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] cursor-pointer transition-colors',
+              p.pinned
+                ? 'bg-primary/15 text-primary hover:bg-primary/20'
+                : 'text-muted-foreground hover:bg-accent/40',
+            )}
+          >
+            {p.pinned ? <Pin className="size-3" /> : <PinOff className="size-3" />}
+            {p.pinned ? 'ピン留め中' : 'ピン留めしない'}
+          </button>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-muted-foreground">負荷</span>
+            <Select
+              value={p.energy}
+              onValueChange={(v) => setProjectEnergy(p.id, v as ProjectEnergy)}
+            >
+              <SelectTrigger className="h-7 w-[68px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="low">軽</SelectItem>
+                <SelectItem value="mid">中</SelectItem>
+                <SelectItem value="high">重</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {isClosed && p.endDate !== undefined && (
+            <span className="text-[11px] text-muted-foreground/75 tabular-nums">
+              終了日: {p.endDate}
+            </span>
+          )}
+          <span className="text-[10px] tracking-wider uppercase text-muted-foreground/60 ml-auto">
+            {isClosed ? '終了済' : '進行中'}
+          </span>
+        </div>
+        {pickerOpen && (
+          <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
+            {PROJECT_COLOR_PALETTE.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => {
+                  recolorProject(p.id, c);
+                  setColorPickerProjectId(null);
+                }}
+                title={c}
+                className={cn(
+                  'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
+                  p.color === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
+                )}
+                style={{ background: c }}
+              />
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // Sortable wrapper for one project row inside a section's SortableContext.
+  // The handle (GripVertical) is the drag activator via {...listeners}; the
+  // rest of the row stays interactive (inputs / selects / buttons remain
+  // usable because the row itself is not draggable).
+  //
+  // No DragOverlay: the source row itself "lifts" via scale/rotate/shadow and
+  // tracks the cursor via useSortable's transform. This is the Mac Finder /
+  // iOS Reminders reorder paradigm and avoids the DragOverlay-vs-Radix-Dialog
+  // (transformed ancestor) cursor-misalignment problem in WKWebView.
+  const SortableProjectRow = ({ p, section }: { p: Project; section: 'active' | 'closed' }) => {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging }
+      = useSortable({ id: p.id });
+    const style: React.CSSProperties = {
+      transform: CSS.Transform.toString(transform),
+      transition: transition ?? undefined,
+      position: 'relative', // ensure zIndex applies during drag (block elements ignore z-index without positioning)
+      ...(isDragging
+        ? {
+            opacity: 0.92,
+            zIndex: 50,
+            boxShadow: 'var(--shadow-floaty)',
+            scale: '1.02',
+            rotate: '-0.4deg',
+            background: 'var(--card)',
+            borderRadius: '8px',
+            cursor: 'grabbing',
+          }
+        : {}),
+    };
+    const handle = (
+      <span
+        {...listeners}
+        {...attributes}
+        title="ドラッグで並び替え (セクション間も可)"
+        className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground shrink-0 select-none touch-none"
+      >
+        <GripVertical className="size-4" />
+      </span>
+    );
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className={cn(
+          'py-2 border-b border-border/60',
+          section === 'closed' && 'opacity-70',
+        )}
+      >
+        {renderProjectRowContent(p, section, handle)}
+      </div>
+    );
+  };
+
+  const SectionDroppable = ({
+    section,
+    children,
+    placeholder,
+  }: {
+    section: 'active' | 'closed';
+    children: ReactNode;
+    placeholder?: string;
+  }) => {
+    const id = section === 'active' ? '__section_active__' : '__section_closed__';
+    const { setNodeRef, isOver } = useDroppable({ id });
+    const showPlaceholder = placeholder !== undefined;
+    // Persistent trailing drop hint: a low-key 22px strip below the items so the
+    // user always has a visible target for "drop at end of section", even when
+    // items fill the section. Highlights when dragged over (closestCenter picks
+    // the section wrapper here since no item is near the cursor).
+    const showTrailingHint = !showPlaceholder && activeDragProjectId !== null;
+    return (
+      <div
+        ref={setNodeRef}
+        className={cn(
+          'rounded transition-colors',
+          isOver && activeDragProjectId !== null && 'bg-primary/8 outline-dashed outline-1 outline-primary/40',
+          showPlaceholder && 'min-h-[40px] flex items-center justify-center text-[11px] text-muted-foreground/70 px-2 py-2.5',
+        )}
+      >
+        {showPlaceholder ? placeholder : children}
+        {showTrailingHint && (
+          <div className="mt-1 h-[22px] rounded border border-dashed border-border/60 flex items-center justify-center text-[10px] text-muted-foreground/60 tracking-wide">
+            {section === 'active' ? 'ここにドロップで進行中の末尾へ' : 'ここにドロップで終了済へ'}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const projectsSensors = useSensors(
+    // distance: 5 to avoid swallowing handle clicks; activation needs movement.
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleProjectSortStart = (e: DragStartEvent): void => {
+    const sourceId = String(e.active.id);
+    setActiveDragProjectId(sourceId);
+    // If user starts dragging an open project while the 終了済 section is
+    // collapsed, temporarily expand it so the drop target is visible. We
+    // remember the prior state and restore it on drag end UNLESS the drop
+    // actually landed in 終了済 (in which case we keep it expanded so the
+    // user can see the result).
+    const sourceProj = projects.find((p) => p.id === sourceId);
+    if (sourceProj !== undefined && isProjectOpen(sourceProj) && !closedSectionExpanded) {
+      closedExpandedBeforeDragRef.current = false;
+      setClosedSectionExpanded(true);
+    }
+  };
+
+  const restoreClosedExpansion = (droppedInClosed: boolean): void => {
+    if (closedExpandedBeforeDragRef.current === false && !droppedInClosed) {
+      setClosedSectionExpanded(false);
+    }
+    closedExpandedBeforeDragRef.current = null;
+  };
+
+  const handleProjectSortCancel = (): void => {
+    setActiveDragProjectId(null);
+    restoreClosedExpansion(false);
+  };
+
+  const handleProjectSortEnd = (e: DragEndEvent): void => {
+    setActiveDragProjectId(null);
+    const { active, over } = e;
+    if (over === null) {
+      restoreClosedExpansion(false);
+      return;
+    }
+    const sourceId = String(active.id);
+    const overId = String(over.id);
+    if (sourceId === overId) {
+      restoreClosedExpansion(false);
+      return;
+    }
+
+    const sourceIdx = projects.findIndex((p) => p.id === sourceId);
+    if (sourceIdx === -1) {
+      restoreClosedExpansion(false);
+      return;
+    }
+    const sourceProj = projects[sourceIdx]!;
+    const sourceWasOpen = isProjectOpen(sourceProj);
+
+    let targetSection: 'active' | 'closed';
+    let destIdx: number;
+    if (overId === '__section_active__') {
+      targetSection = 'active';
+      const activeCount = activeProjects.length;
+      // Position right after the existing tail of active. If source itself was
+      // open, the tail count is one less; otherwise source is joining anew.
+      destIdx = sourceWasOpen ? Math.max(0, activeCount - 1) : activeCount;
+    } else if (overId === '__section_closed__') {
+      targetSection = 'closed';
+      destIdx = projects.length - 1;
+    } else {
+      const overIdx = projects.findIndex((p) => p.id === overId);
+      if (overIdx === -1) {
+        restoreClosedExpansion(false);
+        return;
+      }
+      const overProj = projects[overIdx]!;
+      targetSection = isProjectOpen(overProj) ? 'active' : 'closed';
+      destIdx = overIdx;
+    }
+
+    setProjects((prev) => {
+      const next = [...prev];
+      // Cross-section: stamp / clear endDate on the source row before moving.
+      if (sourceWasOpen && targetSection === 'closed') {
+        next[sourceIdx] = { ...sourceProj, endDate: todayDateStr };
+      } else if (!sourceWasOpen && targetSection === 'active') {
+        const { endDate: _drop, ...rest } = sourceProj;
+        next[sourceIdx] = rest;
+      }
+      return arrayMove(next, sourceIdx, destIdx);
+    });
+    restoreClosedExpansion(targetSection === 'closed');
+  };
 
   if (loadStatus === 'loading') {
     return (
@@ -1016,14 +1380,15 @@ export function App() {
           <h2 className="text-xs font-semibold tracking-widest text-muted-foreground uppercase mb-2">
             稼働中案件
           </h2>
-          {pinnedProjects.length === 0 && (
+          {activeSidebarProjects.length === 0 && (
             <div className="text-[11px] text-muted-foreground/70 px-1.5 py-1 leading-relaxed">
-              ピン留めされた案件がありません。<br />
-              設定 → 案件設定からピン留めしてください。
+              {pinnedProjects.length === 0
+                ? '案件をピン留めすると、ここに表示されます。'
+                : `${formatJaYearMonth(yearMonthOf(currentDate))} に進行中の案件はありません。`}
             </div>
           )}
           <div className="flex flex-col gap-1.5">
-            {pinnedProjects.map((p) => {
+            {activeSidebarProjects.map((p) => {
               const dragEnabled = viewMode === 'day';
               return (
                 <div
@@ -1226,9 +1591,9 @@ export function App() {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  onClick={() => setSettingsView('menu')}
+                  onClick={() => setSettingsView(settingsParent(settingsView))}
                   aria-label="戻る"
-                  title="設定メニューへ戻る"
+                  title="戻る"
                   className="-ml-1"
                 >
                   <ChevronLeft />
@@ -1305,153 +1670,161 @@ export function App() {
 
           {settingsView === 'projects' && (
             <>
-              <div className="mb-4">
+              <div className="mb-4 space-y-3">
                 {projects.length === 0 ? (
                   <div className="text-xs text-muted-foreground py-2">案件が登録されておりません</div>
                 ) : (
-                  projects.map((p) => {
-                    const pickerOpen = colorPickerProjectId === p.id;
-                    return (
-                      <div key={p.id} className="py-2 border-b border-border/60">
-                        <div className="flex items-center gap-2.5">
-                          <button
-                            type="button"
-                            onClick={() => setColorPickerProjectId(pickerOpen ? null : p.id)}
-                            title="色を変更"
-                            aria-label="色を変更"
-                            className={cn(
-                              'w-[18px] h-[18px] rounded shrink-0 cursor-pointer p-0 transition-shadow',
-                              pickerOpen ? 'ring-2 ring-foreground ring-offset-1' : 'border border-foreground/10',
-                            )}
-                            style={{ background: p.color }}
-                          />
-                          <Input
-                            value={p.name}
-                            onChange={(e) => renameProject(p.id, e.currentTarget.value)}
-                            placeholder="案件名"
-                            className="flex-1 h-8 text-[13px]"
-                          />
-                          <Input
-                            type="number"
-                            step={0.05}
-                            min={0}
-                            value={p.monthlyBudget ?? ''}
-                            onChange={(e) => updateProjectBudget(p.id, e.currentTarget.value)}
-                            placeholder="人月"
-                            title="月予算 (人月)"
-                            className="w-[70px] h-8 text-xs"
-                          />
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            onClick={() => handleDeleteProject(p.id)}
+                  <DndContext
+                    sensors={projectsSensors}
+                    collisionDetection={closestCenter}
+                    onDragStart={handleProjectSortStart}
+                    onDragEnd={handleProjectSortEnd}
+                    onDragCancel={handleProjectSortCancel}
+                  >
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSectionExpanded((v) => !v)}
+                        className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground tracking-widest uppercase w-full hover:text-foreground transition-colors py-1"
+                      >
+                        <ChevronDown
+                          className={cn('size-3.5 transition-transform', !activeSectionExpanded && '-rotate-90')}
+                        />
+                        <span>進行中 ({activeProjects.length})</span>
+                      </button>
+                      {activeSectionExpanded && (
+                        <SectionDroppable
+                          section="active"
+                          {...(activeProjects.length === 0 ? { placeholder: '進行中の案件はありません。' } : {})}
+                        >
+                          <SortableContext
+                            items={activeProjects.map((p) => p.id)}
+                            strategy={verticalListSortingStrategy}
                           >
-                            削除
-                          </Button>
-                        </div>
-                        <div className="flex items-center gap-3 mt-2 pl-7">
-                          <button
-                            type="button"
-                            onClick={() => toggleProjectPinned(p.id)}
-                            title={p.pinned ? 'サイドバーから外す' : 'サイドバーに表示'}
-                            aria-label={p.pinned ? 'サイドバーから外す' : 'サイドバーに表示'}
-                            className={cn(
-                              'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] cursor-pointer transition-colors',
-                              p.pinned
-                                ? 'bg-primary/15 text-primary hover:bg-primary/20'
-                                : 'text-muted-foreground hover:bg-accent/40',
-                            )}
-                          >
-                            {p.pinned ? <Pin className="size-3" /> : <PinOff className="size-3" />}
-                            {p.pinned ? 'ピン留め中' : 'ピン留めしない'}
-                          </button>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[11px] text-muted-foreground">負荷</span>
-                            <Select
-                              value={p.energy}
-                              onValueChange={(v) => setProjectEnergy(p.id, v as ProjectEnergy)}
-                            >
-                              <SelectTrigger className="h-7 w-[68px] text-xs">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="low">軽</SelectItem>
-                                <SelectItem value="mid">中</SelectItem>
-                                <SelectItem value="high">重</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                        {pickerOpen && (
-                          <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
-                            {PROJECT_COLOR_PALETTE.map((c) => (
-                              <button
-                                key={c}
-                                type="button"
-                                onClick={() => {
-                                  recolorProject(p.id, c);
-                                  setColorPickerProjectId(null);
-                                }}
-                                title={c}
-                                className={cn(
-                                  'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
-                                  p.color === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
-                                )}
-                                style={{ background: c }}
-                              />
+                            {activeProjects.map((p) => (
+                              <SortableProjectRow key={p.id} p={p} section="active" />
                             ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
+                          </SortableContext>
+                        </SectionDroppable>
+                      )}
+                    </div>
+
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={() => setClosedSectionExpanded((v) => !v)}
+                        className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground tracking-widest uppercase w-full hover:text-foreground transition-colors py-1"
+                      >
+                        <ChevronDown
+                          className={cn('size-3.5 transition-transform', !closedSectionExpanded && '-rotate-90')}
+                        />
+                        <span>終了済 ({closedProjects.length})</span>
+                      </button>
+                      {closedSectionExpanded && (
+                        <SectionDroppable
+                          section="closed"
+                          {...(closedProjects.length === 0 ? { placeholder: '終了済の案件はありません。' } : {})}
+                        >
+                          <SortableContext
+                            items={closedProjects.map((p) => p.id)}
+                            strategy={verticalListSortingStrategy}
+                          >
+                            {closedProjects.map((p) => (
+                              <SortableProjectRow key={p.id} p={p} section="closed" />
+                            ))}
+                          </SortableContext>
+                        </SectionDroppable>
+                      )}
+                      {!closedSectionExpanded && activeDragProjectId !== null && (
+                        <SectionDroppable section="closed" placeholder="ここにドロップで終了済へ">{null}</SectionDroppable>
+                      )}
+                    </div>
+
+                  </DndContext>
                 )}
               </div>
 
-              <div className="border-t border-border/60 pt-3.5 space-y-2">
-                <div className="text-xs text-foreground/85 font-semibold">新しい案件を追加</div>
-                <Input
-                  value={newProjectName}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
-                  }}
-                  placeholder="案件名"
-                />
-                <Input
-                  type="number"
-                  step={0.05}
-                  min={0}
-                  value={newProjectBudget}
-                  onChange={(e) => setNewProjectBudget(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) submitNewProject();
-                  }}
-                  placeholder="月予算 (人月、任意)"
-                />
-                <div className="flex gap-1.5 flex-wrap">
-                  {PROJECT_COLOR_PALETTE.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setNewProjectColor(c)}
-                      title={c}
-                      className={cn(
-                        'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
-                        newProjectColor === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
-                      )}
-                      style={{ background: c }}
+              <div className="border-t border-border/60 pt-3.5">
+                {addProjectFormOpen ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-foreground/85 font-semibold">新しい案件を追加</div>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => {
+                          setAddProjectFormOpen(false);
+                          setNewProjectName('');
+                          setNewProjectBudget('');
+                        }}
+                      >
+                        キャンセル
+                      </Button>
+                    </div>
+                    <Input
+                      autoFocus
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                          submitNewProject();
+                          setAddProjectFormOpen(false);
+                        }
+                      }}
+                      placeholder="案件名"
                     />
-                  ))}
-                </div>
-                <Button
-                  onClick={submitNewProject}
-                  disabled={newProjectName.trim().length === 0}
-                  className="w-full"
-                >
-                  <Plus />
-                  追加
-                </Button>
+                    <Input
+                      type="number"
+                      step={0.05}
+                      min={0}
+                      value={newProjectBudget}
+                      onChange={(e) => setNewProjectBudget(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                          submitNewProject();
+                          setAddProjectFormOpen(false);
+                        }
+                      }}
+                      placeholder="月予算 (人月、任意)"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      {PROJECT_COLOR_PALETTE.map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => setNewProjectColor(c)}
+                          title={c}
+                          className={cn(
+                            'w-[22px] h-[22px] rounded cursor-pointer p-0 transition-all',
+                            newProjectColor === c ? 'ring-2 ring-foreground ring-offset-1' : 'hover:ring-2 hover:ring-foreground/30 hover:ring-offset-1',
+                          )}
+                          style={{ background: c }}
+                        />
+                      ))}
+                    </div>
+                    <Button
+                      onClick={() => {
+                        submitNewProject();
+                        setAddProjectFormOpen(false);
+                      }}
+                      disabled={newProjectName.trim().length === 0}
+                      className="w-full"
+                    >
+                      <Plus />
+                      追加
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setAddProjectFormOpen(true)}
+                    className="w-full"
+                  >
+                    <Plus />
+                    新しい案件を追加
+                  </Button>
+                )}
               </div>
             </>
           )}
@@ -1621,72 +1994,30 @@ export function App() {
                       </div>
 
                       {(() => {
-                        const hidden = Object.entries(gcalAssignments).filter(([, a]) => a.hidden === true);
-                        if (hidden.length === 0) return null;
+                        const hiddenCount = Object.values(gcalAssignments).filter((a) => a.hidden === true).length;
+                        const rulesCount = Object.keys(gcalSummaryRules).length;
                         return (
-                          <div className="mt-3 pt-2.5 border-t border-border/60">
-                            <div className="text-xs font-semibold text-foreground/85 mb-1.5">
-                              非表示中のイベント ({hidden.length})
-                            </div>
-                            <div className="max-h-40 overflow-y-auto flex flex-col gap-1">
-                              {hidden.map(([key, a]) => (
-                                <div key={key} className="flex items-center gap-2 px-1.5 py-1 bg-card border border-border/40 rounded text-[11px]">
-                                  <span className="flex-1 text-foreground/85 truncate">
-                                    {a.summary ?? '(タイトル不明)'}
-                                  </span>
-                                  <Button
-                                    size="xs"
-                                    variant="outline"
-                                    onClick={() => restoreGcalAssignment(key)}
-                                  >
-                                    再表示
-                                  </Button>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {(() => {
-                        const rules = Object.entries(gcalSummaryRules);
-                        if (rules.length === 0) return null;
-                        return (
-                          <div className="mt-3 pt-2.5 border-t border-border/60">
-                            <div className="text-xs font-semibold text-foreground/85 mb-1.5">
-                              同名予定ルール ({rules.length})
-                            </div>
-                            <div className="max-h-52 overflow-y-auto flex flex-col gap-1">
-                              {rules.map(([summary, r]) => {
-                                const proj = r.projectId !== undefined ? projectById.get(r.projectId) : undefined;
-                                return (
-                                  <div key={summary} className="flex items-center gap-2 px-1.5 py-1 bg-card border border-border/40 rounded text-[11px]">
-                                    <span className="flex-1 text-foreground/85 truncate">
-                                      {summary}
-                                    </span>
-                                    <span
-                                      className="text-[10px] px-1.5 py-px rounded whitespace-nowrap"
-                                      style={{
-                                        background: r.hidden === true ? '#F0E5D0' : (proj?.color ?? 'var(--muted)'),
-                                        color: r.hidden === true ? '#7A5530' : 'white',
-                                      }}
-                                    >
-                                      {r.hidden === true ? '非表示' : (proj?.name ?? '未割当')}
-                                    </span>
-                                    <Button
-                                      size="xs"
-                                      variant="outline"
-                                      onClick={() => setGcalSummaryRules((prev) => {
-                                        const { [summary]: _omit, ...rest } = prev;
-                                        return rest;
-                                      })}
-                                    >
-                                      削除
-                                    </Button>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                          <div className="mt-3 pt-2.5 border-t border-border/60 grid grid-cols-2 gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setSettingsView('gcal-hidden')}
+                              disabled={hiddenCount === 0}
+                              className="justify-between"
+                            >
+                              <span>非表示中のイベント</span>
+                              <span className="text-muted-foreground tabular-nums">{hiddenCount}</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setSettingsView('gcal-rules')}
+                              disabled={rulesCount === 0}
+                              className="justify-between"
+                            >
+                              <span>同名予定ルール</span>
+                              <span className="text-muted-foreground tabular-nums">{rulesCount}</span>
+                            </Button>
                           </div>
                         );
                       })()}
@@ -1696,6 +2027,114 @@ export function App() {
               )}
             </div>
           )}
+
+          {settingsView === 'gcal-hidden' && (() => {
+            const q = settingsSearch.trim().toLowerCase();
+            const all = Object.entries(gcalAssignments).filter(([, a]) => a.hidden === true);
+            const filtered = q.length === 0
+              ? all
+              : all.filter(([, a]) => (a.summary ?? '').toLowerCase().includes(q));
+            return (
+              <div className="space-y-3">
+                <Input
+                  value={settingsSearch}
+                  onChange={(e) => setSettingsSearch(e.currentTarget.value)}
+                  placeholder="タイトルで検索"
+                  autoFocus
+                />
+                {all.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">非表示にしているイベントはありません。</div>
+                ) : filtered.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">該当なし</div>
+                ) : (
+                  <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto">
+                    {filtered.map(([key, a]) => (
+                      <div key={key} className="flex items-center gap-2 px-2.5 py-1.5 bg-card border border-border/40 rounded text-xs">
+                        <span className="flex-1 text-foreground/85 truncate" title={a.summary}>
+                          {a.summary ?? '(タイトル不明)'}
+                        </span>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => restoreGcalAssignment(key)}
+                        >
+                          再表示
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="text-[11px] text-muted-foreground/80">
+                  {filtered.length} / {all.length} 件
+                </div>
+              </div>
+            );
+          })()}
+
+          {settingsView === 'gcal-rules' && (() => {
+            const q = settingsSearch.trim().toLowerCase();
+            const all = Object.entries(gcalSummaryRules);
+            const filtered = q.length === 0
+              ? all
+              : all.filter(([summary, r]) => {
+                  if (summary.toLowerCase().includes(q)) return true;
+                  if (r.projectId !== undefined) {
+                    const proj = projectById.get(r.projectId);
+                    if (proj?.name.toLowerCase().includes(q)) return true;
+                  }
+                  return false;
+                });
+            return (
+              <div className="space-y-3">
+                <Input
+                  value={settingsSearch}
+                  onChange={(e) => setSettingsSearch(e.currentTarget.value)}
+                  placeholder="タイトル / 案件名で検索"
+                  autoFocus
+                />
+                {all.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">同名予定ルールはありません。</div>
+                ) : filtered.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">該当なし</div>
+                ) : (
+                  <div className="flex flex-col gap-1 max-h-[60vh] overflow-y-auto">
+                    {filtered.map(([summary, r]) => {
+                      const proj = r.projectId !== undefined ? projectById.get(r.projectId) : undefined;
+                      return (
+                        <div key={summary} className="flex items-center gap-2 px-2.5 py-1.5 bg-card border border-border/40 rounded text-xs">
+                          <span className="flex-1 text-foreground/85 truncate" title={summary}>
+                            {summary}
+                          </span>
+                          <span
+                            className="text-[10px] px-1.5 py-px rounded whitespace-nowrap"
+                            style={{
+                              background: r.hidden === true ? '#F0E5D0' : (proj?.color ?? 'var(--muted)'),
+                              color: r.hidden === true ? '#7A5530' : 'white',
+                            }}
+                          >
+                            {r.hidden === true ? '非表示' : (proj?.name ?? '未割当')}
+                          </span>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => setGcalSummaryRules((prev) => {
+                              const { [summary]: _omit, ...rest } = prev;
+                              return rest;
+                            })}
+                          >
+                            削除
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <div className="text-[11px] text-muted-foreground/80">
+                  {filtered.length} / {all.length} 件
+                </div>
+              </div>
+            );
+          })()}
 
           {settingsView === 'data' && (
             <div className="space-y-3">
@@ -1782,7 +2221,7 @@ export function App() {
                   <div className="text-xs text-muted-foreground py-2">案件が登録されておりません</div>
                 ) : (
                   <div className="flex flex-col gap-3.5">
-                    {projects.map((p) => {
+                    {projects.filter((p) => isProjectActiveInMonth(p, ym)).map((p) => {
                       const minutes = aggregate.byProject.get(p.id) ?? 0;
                       const u = projectBudgetUsage(p, minutes, elapsed, ym);
                       const effectivePM = effectiveBudgetPM(p, ym);
@@ -2013,17 +2452,26 @@ export function App() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__unassigned__">— 未割当 —</SelectItem>
-                    {projects.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        <span className="inline-flex items-center gap-2">
-                          <span
-                            className="w-2.5 h-2.5 rounded-[3px] inline-block"
-                            style={{ background: p.color }}
-                          />
-                          {p.name}
-                        </span>
-                      </SelectItem>
-                    ))}
+                    {projects
+                      .filter((p) =>
+                        isProjectActiveInMonth(p, yearMonthOf(currentDate))
+                        || blockEdit.projectId === p.id
+                      )
+                      .map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          <span className="inline-flex items-center gap-2">
+                            <span
+                              className="w-2.5 h-2.5 rounded-[3px] inline-block"
+                              style={{ background: p.color }}
+                            />
+                            {p.name}
+                            {p.endDate !== undefined
+                              && yearMonthOf(currentDate) > p.endDate.slice(0, 7) && (
+                                <span className="text-[10px] text-muted-foreground">(終了)</span>
+                            )}
+                          </span>
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>

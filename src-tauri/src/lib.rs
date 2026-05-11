@@ -26,6 +26,18 @@ fn migrations() -> Vec<tauri_plugin_sql::Migration> {
       sql: include_str!("../migrations/004_project_pinned_energy.sql"),
       kind: tauri_plugin_sql::MigrationKind::Up,
     },
+    tauri_plugin_sql::Migration {
+      version: 5,
+      description: "add end_month + position to projects",
+      sql: include_str!("../migrations/005_project_end_month_position.sql"),
+      kind: tauri_plugin_sql::MigrationKind::Up,
+    },
+    tauri_plugin_sql::Migration {
+      version: 6,
+      description: "add end_date (supersedes end_month) to projects",
+      sql: include_str!("../migrations/006_project_end_date.sql"),
+      kind: tauri_plugin_sql::MigrationKind::Up,
+    },
   ]
 }
 

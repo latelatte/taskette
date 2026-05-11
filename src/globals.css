@@ -174,3 +174,26 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- Empty <input type="date"> ----------
+   .date-empty class is applied when the input has no value. We hide the
+   YYYY/MM/DD slot text but keep the calendar picker indicator (right-edge
+   icon) visible so the user still has a clear affordance for opening the
+   picker. When the field becomes focused, the slots reappear so editing
+   still works. */
+.date-empty:not(:focus)::-webkit-datetime-edit-fields-wrapper,
+.date-empty:not(:focus)::-webkit-datetime-edit-text,
+.date-empty:not(:focus)::-webkit-datetime-edit-year-field,
+.date-empty:not(:focus)::-webkit-datetime-edit-month-field,
+.date-empty:not(:focus)::-webkit-datetime-edit-day-field {
+  visibility: hidden;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}

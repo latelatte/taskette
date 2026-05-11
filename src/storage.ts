@@ -6,13 +6,29 @@ import { DEFAULT_TEMPLATES } from './templates.js';
 const isProjectEnergy = (v: unknown): v is ProjectEnergy =>
   v === 'low' || v === 'mid' || v === 'high';
 
-const normalizeProject = (p: Project): Project => ({
-  ...p,
-  // Migration default for existing projects: pin those that have a budget set
-  // (treats them as actively tracked, matching pre-Slice-18 sidebar behavior).
-  pinned: typeof p.pinned === 'boolean' ? p.pinned : p.monthlyBudget !== undefined,
-  energy: isProjectEnergy(p.energy) ? p.energy : 'mid',
-});
+const lastDayOfMonth = (ym: string): string => {
+  const [y, m] = ym.split('-').map(Number);
+  // new Date(year, monthZeroIndexed + 1, 0) — day 0 of next month = last day of current.
+  const d = new Date(y!, m!, 0);
+  return `${ym}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const normalizeProject = (p: Project & { endMonth?: string }): Project => {
+  // endMonth (legacy v0.2.0) → endDate (v0.2.x+). If both present, endDate wins.
+  let endDate: string | undefined;
+  if (typeof p.endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.endDate)) {
+    endDate = p.endDate;
+  } else if (typeof p.endMonth === 'string' && /^\d{4}-\d{2}$/.test(p.endMonth)) {
+    endDate = lastDayOfMonth(p.endMonth);
+  }
+  const { endMonth: _legacy, endDate: _curEnd, ...rest } = p;
+  return {
+    ...rest,
+    pinned: typeof p.pinned === 'boolean' ? p.pinned : p.monthlyBudget !== undefined,
+    energy: isProjectEnergy(p.energy) ? p.energy : 'mid',
+    ...(endDate !== undefined ? { endDate } : {}),
+  };
+};
 
 const STORAGE_KEY = 'taskette/v1';
 const SCHEMA_VERSION = 1;
@@ -71,6 +87,7 @@ const sanitizeProjectOverrides = (p: Project): Project => {
     pinned: base.pinned,
     energy: base.energy,
     ...(base.monthlyBudget !== undefined ? { monthlyBudget: base.monthlyBudget } : {}),
+    ...(base.endDate !== undefined ? { endDate: base.endDate } : {}),
   });
   if (typeof ov !== 'object' || ov === null || Array.isArray(ov)) return dropOverrides();
   const clean: Record<string, number> = {};
@@ -330,8 +347,10 @@ class SqliteBackend implements StorageBackend {
       monthly_budget_pm: number | null;
       pinned: number;
       energy: string;
+      end_date: string | null;
+      position: number;
     }[]>(
-      'SELECT id, name, color, monthly_budget_pm, pinned, energy FROM projects WHERE deleted_at IS NULL',
+      'SELECT id, name, color, monthly_budget_pm, pinned, energy, end_date, position FROM projects WHERE deleted_at IS NULL ORDER BY position ASC, rowid ASC',
     );
 
     const overrideRows = await db.select<{
@@ -357,6 +376,7 @@ class SqliteBackend implements StorageBackend {
         energy: ProjectEnergy;
         monthlyBudget?: number;
         monthlyBudgetOverrides?: Record<string, number>;
+        endDate?: string;
       } = {
         id: r.id,
         name: r.name,
@@ -365,6 +385,7 @@ class SqliteBackend implements StorageBackend {
         energy: isProjectEnergy(r.energy) ? r.energy : 'mid',
       };
       if (r.monthly_budget_pm !== null) obj.monthlyBudget = r.monthly_budget_pm;
+      if (r.end_date !== null && /^\d{4}-\d{2}-\d{2}$/.test(r.end_date)) obj.endDate = r.end_date;
       const ov = overrideMap[r.id];
       if (ov !== undefined && Object.keys(ov).length > 0) obj.monthlyBudgetOverrides = ov;
       return obj;
@@ -493,23 +514,29 @@ class SqliteBackend implements StorageBackend {
       // projects
       const prevProjMap = new Map(prev.projects.map((p) => [p.id, p]));
       const nextProjMap = new Map(filtered.projects.map((p) => [p.id, p]));
+      const prevPositions = new Map(prev.projects.map((p, i) => [p.id, i]));
+      let i = 0;
       for (const [id, p] of nextProjMap) {
+        const newPos = i++;
         const old = prevProjMap.get(id);
+        const oldPos = prevPositions.get(id);
         if (old === undefined) {
           await db.execute(
-            'INSERT INTO projects (id, name, color, monthly_budget_pm, pinned, energy, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, monthly_budget_pm = excluded.monthly_budget_pm, pinned = excluded.pinned, energy = excluded.energy, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = projects.revision + 1',
-            [id, p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, now, now, dev, dev],
+            'INSERT INTO projects (id, name, color, monthly_budget_pm, pinned, energy, end_date, position, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, monthly_budget_pm = excluded.monthly_budget_pm, pinned = excluded.pinned, energy = excluded.energy, end_date = excluded.end_date, position = excluded.position, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = projects.revision + 1',
+            [id, p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, p.endDate ?? null, newPos, now, now, dev, dev],
           );
         } else if (
           old.name !== p.name ||
           old.color !== p.color ||
           old.monthlyBudget !== p.monthlyBudget ||
           old.pinned !== p.pinned ||
-          old.energy !== p.energy
+          old.energy !== p.energy ||
+          old.endDate !== p.endDate ||
+          oldPos !== newPos
         ) {
           await db.execute(
-            'UPDATE projects SET name = ?, color = ?, monthly_budget_pm = ?, pinned = ?, energy = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
-            [p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, now, dev, id],
+            'UPDATE projects SET name = ?, color = ?, monthly_budget_pm = ?, pinned = ?, energy = ?, end_date = ?, position = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
+            [p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, p.endDate ?? null, newPos, now, dev, id],
           );
         }
       }

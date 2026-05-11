@@ -12,7 +12,24 @@ export type Project = {
   readonly monthlyBudgetOverrides?: Readonly<Record<string, number>>;
   readonly pinned: boolean;
   readonly energy: ProjectEnergy;
+  /** YYYY-MM-DD. The last day the project is active (inclusive). undefined = ongoing. */
+  readonly endDate?: string;
 };
+
+/**
+ * A project is active in a given YYYY-MM iff its endDate is unset or its
+ * endDate's month >= ym. A project ending mid-month (e.g. 2026-04-15) is still
+ * counted as active for the whole of 2026-04 — the user might log work in the
+ * end month leading up to the end date.
+ */
+export const isProjectActiveInMonth = (p: Project, ym: string): boolean => {
+  if (p.endDate === undefined) return true;
+  return p.endDate.slice(0, 7) >= ym;
+};
+
+/** Strict day-precision check. Used by allocation proposal to skip days past endDate. */
+export const isProjectActiveOnDate = (p: Project, date: string): boolean =>
+  p.endDate === undefined || date <= p.endDate;
 
 export type TaskTemplate = {
   readonly id: string;
