@@ -47,7 +47,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDRUZCRjk0QkZDNzY4NzMKUldSemFNZS9sTC92L0Z1dXprQTU5Mk9uRGpLbjIrV3g4N2x5N3VwZVlIMm53RTg4M0hGWFA5ejIK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5MENGMDBCNjQyRURENTMKUldSVDNTNWtDL0FNK1QxWng2THZBWDB3K3pWa3JMelpFYjloS1l4UWN2VkRGMGQ1K1N1K1RYSWYK",
       "endpoints": [
         "https://github.com/latelatte/taskette/releases/latest/download/latest.json"
       ]
