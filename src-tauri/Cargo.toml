@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.3.1"
+version = "0.4.0"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -31,7 +31,12 @@ tauri-plugin-process = "2"
 tauri-plugin-updater = ">=2.10"
 oauth2 = "4"
 tiny_http = "0.12"
-keyring = { version = "3", features = ["apple-native"] }
 webbrowser = "1"
 url = "2"
 tokio = { version = "1", features = ["sync", "time"] }
+
+[target."cfg(target_os = \"macos\")".dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target."cfg(target_os = \"windows\")".dependencies]
+keyring = { version = "3", features = ["windows-native"] }

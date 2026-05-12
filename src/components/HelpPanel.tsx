@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react';
+import { isMac } from '../lib/utils.js';
 
 type SectionProps = { readonly title: string; readonly children: ReactNode };
+
+const mod = isMac ? '⌘' : 'Ctrl+';
+const modShift = isMac ? '⌘⇧' : 'Ctrl+Shift+';
 
 function Section({ title, children }: SectionProps) {
   return (
@@ -32,7 +36,7 @@ export function HelpPanel({ onOpenShortcuts }: { onOpenShortcuts: () => void }) 
         <Row label="編集" body="ブロックを右クリックで編集ダイアログ。" />
         <Row label="移動 / 伸縮" body="ブロックをドラッグで移動。下端を掴んでドラッグでリサイズ。" />
         <Row label="重なり" body="同じ時間に複数ブロックを置けます。横に並んで表示されます。" />
-        <Row label="やり直し" body={<>誤操作は <kbd className="px-1 rounded bg-muted text-xs">⌘Z</kbd> / <kbd className="px-1 rounded bg-muted text-xs">⌘⇧Z</kbd>。</>} />
+        <Row label="やり直し" body={<>誤操作は <kbd className="px-1 rounded bg-muted text-xs">{mod}Z</kbd> / <kbd className="px-1 rounded bg-muted text-xs">{modShift}Z</kbd>。</>} />
       </Section>
 
       <Section title="案件と工数管理">

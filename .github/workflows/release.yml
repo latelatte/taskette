@@ -8,9 +8,30 @@ on:
 permissions:
   contents: write
 
+# Serialize across reruns / manual triggers so two workflow runs never touch
+# the same draft release's latest.json concurrently (tauri-action does a
+# read-modify-write on the manifest).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build:
+    strategy:
+      fail-fast: false
+      # Serialize jobs so each tauri-action merges its platform entry into the
+      # same draft release's latest.json without racing the previous OS.
+      max-parallel: 1
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: windows-latest
+            args: ''
+            rust-targets: ''
+
+    runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
 
     steps:
@@ -26,7 +47,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.rust-targets }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -49,7 +70,11 @@ jobs:
             アプリ内設定 > リリースノートから変更点をご覧いただけます。
 
             ## インストール
-            DMG をダウンロードして開き、Applications フォルダにドラッグしてください。
+            - **macOS**: `.dmg` をダウンロードして開き、Applications フォルダにドラッグ
+            - **Windows**: `.exe` (NSIS, 推奨) または `.msi` をダウンロードして実行
+
+            初回起動時、macOS は Gatekeeper、Windows は SmartScreen の警告が出ます (未署名のため)。詳細メニューから実行を許可してください。
           releaseDraft: true
           prerelease: false
-          args: --target universal-apple-darwin
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
