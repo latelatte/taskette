@@ -6,6 +6,24 @@ type Release = {
 
 const RELEASES: readonly Release[] = [
   {
+    version: '0.4.1',
+    date: '2026-05-12',
+    highlights: [
+      'macOS と Windows のビルドで SQL マイグレーションのチェックサムが食い違い、起動時に「migration N was previously applied but has been modified」警告が出ていた問題を修正',
+      'クロスプラットフォーム開発の標準に倣い、リポジトリ全体の改行コードを LF に統一 (`.gitattributes`)',
+    ],
+  },
+  {
+    version: '0.4.0',
+    date: '2026-05-12',
+    highlights: [
+      'Windows 版を初リリース。CI で macOS + Windows 両方を自動ビルド (NSIS / MSI インストーラー)',
+      'プラットフォームに応じてキーボードショートカット表記を Cmd / Ctrl で自動切替',
+      'Windows ではキーチェーンの代わりに Windows Credential Manager に refresh token を保存',
+      'CI ビルドの配布物に Google OAuth Client ID が含まれていなかった不具合を修正',
+    ],
+  },
+  {
     version: '0.3.1',
     date: '2026-05-12',
     highlights: [
