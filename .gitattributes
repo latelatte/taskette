@@ -1,0 +1,61 @@
+# Normalize line endings across platforms.
+#
+# Why this matters here: `src-tauri/src/lib.rs` uses `include_str!` to inline
+# the SQL migration files at compile time, and tauri-plugin-sql (sqlx) records
+# a byte-level checksum of each migration in `_sqlx_migrations`. If a Windows
+# CI build checks out the .sql files with CRLF while a macOS build uses LF,
+# the two binaries compute *different* checksums for the same migration,
+# producing "migration N was previously applied but has been modified"
+# warnings when a DB written on one OS is opened on the other.
+#
+# The same hazard applies to any file Rust bakes into the binary with
+# include_str! / include_bytes!.
+
+# Default: detect text, force LF on checkout/checkin.
+* text=auto eol=lf
+
+# Source — explicit LF (defensive; redundant with the rule above but
+# survives future edits to the default).
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.sql   text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.jsx   text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+
+# Windows-only scripts: must stay CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary — never touch.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.icns  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.wav   binary
+*.mp3   binary
+*.mp4   binary
+*.webm  binary
