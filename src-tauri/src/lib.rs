@@ -38,6 +38,12 @@ fn migrations() -> Vec<tauri_plugin_sql::Migration> {
       sql: include_str!("../migrations/006_project_end_date.sql"),
       kind: tauri_plugin_sql::MigrationKind::Up,
     },
+    tauri_plugin_sql::Migration {
+      version: 7,
+      description: "add start_date to projects",
+      sql: include_str!("../migrations/007_project_start_date.sql"),
+      kind: tauri_plugin_sql::MigrationKind::Up,
+    },
   ]
 }
 

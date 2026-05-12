@@ -103,6 +103,73 @@ describe('projectBudgetUsage', () => {
   });
 });
 
+describe('projectBudgetUsage with finalized project (endDate)', () => {
+  const projEnded = (monthlyBudget: number, endDate: string): Project => ({
+    id: 'p1',
+    name: 'A',
+    color: '#000',
+    pinned: false,
+    energy: 'mid',
+    monthlyBudget,
+    endDate,
+  });
+
+  it('suppresses projectedUnder when project ended before today', () => {
+    // budget 1 PM = 160h, low = 140h. Mid-month elapsed=0.36, actual 5h would
+    // normally project to ~14h < 140h → projectedUnder. With endDate in past,
+    // we drop projection and the result becomes underConfirmed (final tally).
+    const u = projectBudgetUsage(
+      projEnded(1, '2026-05-10'),
+      minutes(5),
+      0.36,
+      '2026-05',
+      '2026-05-12',
+    );
+    expect(u.projection).toBe(null);
+    expect(u.status).toBe('underConfirmed');
+  });
+
+  it('still flags over when actual exceeds high band even after finalization', () => {
+    const u = projectBudgetUsage(
+      projEnded(0.5, '2026-05-10'),
+      minutes(200),
+      0.36,
+      '2026-05',
+      '2026-05-12',
+    );
+    expect(u.status).toBe('over');
+  });
+
+  it('returns ok when finalized project sits inside tolerance band', () => {
+    // 0.5 PM = 80h budget, tolerance ±10h, low=70 high=90.
+    const u = projectBudgetUsage(
+      projEnded(0.5, '2026-05-10'),
+      minutes(80),
+      0.36,
+      '2026-05',
+      '2026-05-12',
+    );
+    expect(u.status).toBe('ok');
+  });
+
+  it('keeps projection logic when today is undefined (back-compat)', () => {
+    const u = projectBudgetUsage(projEnded(1, '2026-05-10'), minutes(10), 0.5);
+    expect(u.status).toBe('projectedUnder');
+  });
+
+  it('keeps projection when endDate is in future relative to today', () => {
+    // endDate is later this month — project still has runway, projection applies
+    const u = projectBudgetUsage(
+      projEnded(1, '2026-05-25'),
+      minutes(10),
+      0.36,
+      '2026-05',
+      '2026-05-12',
+    );
+    expect(u.status).toBe('projectedUnder');
+  });
+});
+
 describe('effectiveBudgetPM', () => {
   const projWithOverride = (
     base?: number,

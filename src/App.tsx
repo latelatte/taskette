@@ -53,6 +53,7 @@ import {
   Plus,
   Settings2,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { cn, isMac } from './lib/utils.js';
 import { Button } from './components/ui/button.js';
@@ -825,6 +826,38 @@ export function App() {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, energy } : p)));
   };
 
+  const updateProjectStartDate = (id: string, value: string): void => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const trimmed = value.trim();
+        if (trimmed === '') {
+          const { startDate: _drop, ...rest } = p;
+          return rest;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return p;
+        if (p.endDate !== undefined && trimmed > p.endDate) return p;
+        return { ...p, startDate: trimmed };
+      }),
+    );
+  };
+
+  const updateProjectEndDate = (id: string, value: string): void => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const trimmed = value.trim();
+        if (trimmed === '') {
+          const { endDate: _drop, ...rest } = p;
+          return rest;
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return p;
+        if (p.startDate !== undefined && trimmed < p.startDate) return p;
+        return { ...p, endDate: trimmed };
+      }),
+    );
+  };
+
   // Section classification is presence-based, NOT date-based. As soon as the
   // user drags a project to 終了済, endDate gets stamped and the project moves
   // sections — regardless of whether that date is in the current month.
@@ -1132,14 +1165,51 @@ export function App() {
               </SelectContent>
             </Select>
           </div>
-          {isClosed && p.endDate !== undefined && (
-            <span className="text-[11px] text-muted-foreground/75 tabular-nums">
-              終了日: {p.endDate}
-            </span>
-          )}
           <span className="text-[10px] tracking-wider uppercase text-muted-foreground/60 ml-auto">
             {isClosed ? '終了済' : '進行中'}
           </span>
+        </div>
+        <div className="flex items-center gap-1.5 mt-1.5 pl-7 flex-wrap">
+          <span className="text-[11px] text-muted-foreground shrink-0">期間</span>
+          <Input
+            type="date"
+            value={p.startDate ?? ''}
+            onChange={(e) => updateProjectStartDate(p.id, e.currentTarget.value)}
+            {...(p.endDate !== undefined ? { max: p.endDate } : {})}
+            aria-label="開始日"
+            className="h-7 w-[138px] text-xs tabular-nums"
+          />
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => updateProjectStartDate(p.id, '')}
+            disabled={p.startDate === undefined}
+            title="開始日をクリア"
+            aria-label="開始日をクリア"
+            className="text-muted-foreground/60"
+          >
+            <X />
+          </Button>
+          <span className="text-[11px] text-muted-foreground/60">〜</span>
+          <Input
+            type="date"
+            value={p.endDate ?? ''}
+            onChange={(e) => updateProjectEndDate(p.id, e.currentTarget.value)}
+            {...(p.startDate !== undefined ? { min: p.startDate } : {})}
+            aria-label="終了日"
+            className="h-7 w-[138px] text-xs tabular-nums"
+          />
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => updateProjectEndDate(p.id, '')}
+            disabled={p.endDate === undefined}
+            title="終了日をクリア"
+            aria-label="終了日をクリア"
+            className="text-muted-foreground/60"
+          >
+            <X />
+          </Button>
         </div>
         {pickerOpen && (
           <div className="flex gap-1.5 mt-2 pl-7 flex-wrap">
@@ -2237,7 +2307,7 @@ export function App() {
                   <div className="flex flex-col gap-3.5">
                     {projects.filter((p) => isProjectActiveInMonth(p, ym)).map((p) => {
                       const minutes = aggregate.byProject.get(p.id) ?? 0;
-                      const u = projectBudgetUsage(p, minutes, elapsed, ym);
+                      const u = projectBudgetUsage(p, minutes, elapsed, ym, todayDateStr);
                       const effectivePM = effectiveBudgetPM(p, ym);
                       const hasOverride = p.monthlyBudgetOverrides?.[ym] !== undefined;
                       const isEditingThis = editingMonthBudgetProjectId === p.id;

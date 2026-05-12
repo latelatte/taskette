@@ -41,10 +41,21 @@ export const projectBudgetUsage = (
   actualMinutes: number,
   elapsed: number,
   yearMonth?: string,
+  today?: string,
 ): BudgetUsage => {
   const actualH = actualMinutes / 60;
   const actualPM = actualH / HOURS_PER_PERSON_MONTH;
   const budgetPM = effectiveBudgetPM(project, yearMonth);
+
+  // A finalized project (already past its endDate) gets final-tally treatment:
+  // projection-based statuses make no sense once no more work will be logged.
+  const isFinalized = today !== undefined
+    && project.endDate !== undefined
+    && project.endDate < today;
+  const effectiveElapsed = isFinalized ? 1 : elapsed;
+  const projection = isFinalized
+    ? null
+    : (elapsed >= PROJECTION_MIN_ELAPSED ? actualH / elapsed : null);
 
   if (budgetPM === undefined) {
     return {
@@ -55,7 +66,7 @@ export const projectBudgetUsage = (
       lowH: null,
       highH: null,
       toleranceH: 0,
-      projection: elapsed >= PROJECTION_MIN_ELAPSED ? actualH / elapsed : null,
+      projection,
       ratio: 0,
       barFraction: 0,
     };
@@ -67,13 +78,12 @@ export const projectBudgetUsage = (
   const highH = budgetH + toleranceH;
   const ratio = budgetH > 0 ? actualH / budgetH : 0;
   const barFraction = highH > 0 ? Math.min(1, actualH / highH) : 0;
-  const projection = elapsed >= PROJECTION_MIN_ELAPSED ? actualH / elapsed : null;
 
   const isOver = actualH > highH;
-  const isUnderConfirmed = elapsed >= 1 && actualH < lowH;
+  const isUnderConfirmed = effectiveElapsed >= 1 && actualH < lowH;
   const isProjectedOver = !isOver && projection !== null && projection > highH;
   const isProjectedUnder =
-    !isUnderConfirmed && projection !== null && projection < lowH && elapsed < 1;
+    !isUnderConfirmed && projection !== null && projection < lowH && effectiveElapsed < 1;
 
   const status: BudgetStatus = isOver
     ? 'over'

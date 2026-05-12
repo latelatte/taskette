@@ -21,11 +21,20 @@ const normalizeProject = (p: Project & { endMonth?: string }): Project => {
   } else if (typeof p.endMonth === 'string' && /^\d{4}-\d{2}$/.test(p.endMonth)) {
     endDate = lastDayOfMonth(p.endMonth);
   }
-  const { endMonth: _legacy, endDate: _curEnd, ...rest } = p;
+  let startDate: string | undefined;
+  if (typeof p.startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.startDate)) {
+    startDate = p.startDate;
+  }
+  // Drop inverted ranges silently — UI guards this, but be defensive on load.
+  if (startDate !== undefined && endDate !== undefined && startDate > endDate) {
+    startDate = undefined;
+  }
+  const { endMonth: _legacy, endDate: _curEnd, startDate: _curStart, ...rest } = p;
   return {
     ...rest,
     pinned: typeof p.pinned === 'boolean' ? p.pinned : p.monthlyBudget !== undefined,
     energy: isProjectEnergy(p.energy) ? p.energy : 'mid',
+    ...(startDate !== undefined ? { startDate } : {}),
     ...(endDate !== undefined ? { endDate } : {}),
   };
 };
@@ -87,6 +96,7 @@ const sanitizeProjectOverrides = (p: Project): Project => {
     pinned: base.pinned,
     energy: base.energy,
     ...(base.monthlyBudget !== undefined ? { monthlyBudget: base.monthlyBudget } : {}),
+    ...(base.startDate !== undefined ? { startDate: base.startDate } : {}),
     ...(base.endDate !== undefined ? { endDate: base.endDate } : {}),
   });
   if (typeof ov !== 'object' || ov === null || Array.isArray(ov)) return dropOverrides();
@@ -347,10 +357,11 @@ class SqliteBackend implements StorageBackend {
       monthly_budget_pm: number | null;
       pinned: number;
       energy: string;
+      start_date: string | null;
       end_date: string | null;
       position: number;
     }[]>(
-      'SELECT id, name, color, monthly_budget_pm, pinned, energy, end_date, position FROM projects WHERE deleted_at IS NULL ORDER BY position ASC, rowid ASC',
+      'SELECT id, name, color, monthly_budget_pm, pinned, energy, start_date, end_date, position FROM projects WHERE deleted_at IS NULL ORDER BY position ASC, rowid ASC',
     );
 
     const overrideRows = await db.select<{
@@ -376,6 +387,7 @@ class SqliteBackend implements StorageBackend {
         energy: ProjectEnergy;
         monthlyBudget?: number;
         monthlyBudgetOverrides?: Record<string, number>;
+        startDate?: string;
         endDate?: string;
       } = {
         id: r.id,
@@ -385,6 +397,7 @@ class SqliteBackend implements StorageBackend {
         energy: isProjectEnergy(r.energy) ? r.energy : 'mid',
       };
       if (r.monthly_budget_pm !== null) obj.monthlyBudget = r.monthly_budget_pm;
+      if (r.start_date !== null && /^\d{4}-\d{2}-\d{2}$/.test(r.start_date)) obj.startDate = r.start_date;
       if (r.end_date !== null && /^\d{4}-\d{2}-\d{2}$/.test(r.end_date)) obj.endDate = r.end_date;
       const ov = overrideMap[r.id];
       if (ov !== undefined && Object.keys(ov).length > 0) obj.monthlyBudgetOverrides = ov;
@@ -522,8 +535,8 @@ class SqliteBackend implements StorageBackend {
         const oldPos = prevPositions.get(id);
         if (old === undefined) {
           await db.execute(
-            'INSERT INTO projects (id, name, color, monthly_budget_pm, pinned, energy, end_date, position, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, monthly_budget_pm = excluded.monthly_budget_pm, pinned = excluded.pinned, energy = excluded.energy, end_date = excluded.end_date, position = excluded.position, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = projects.revision + 1',
-            [id, p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, p.endDate ?? null, newPos, now, now, dev, dev],
+            'INSERT INTO projects (id, name, color, monthly_budget_pm, pinned, energy, start_date, end_date, position, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET name = excluded.name, color = excluded.color, monthly_budget_pm = excluded.monthly_budget_pm, pinned = excluded.pinned, energy = excluded.energy, start_date = excluded.start_date, end_date = excluded.end_date, position = excluded.position, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = projects.revision + 1',
+            [id, p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, p.startDate ?? null, p.endDate ?? null, newPos, now, now, dev, dev],
           );
         } else if (
           old.name !== p.name ||
@@ -531,12 +544,13 @@ class SqliteBackend implements StorageBackend {
           old.monthlyBudget !== p.monthlyBudget ||
           old.pinned !== p.pinned ||
           old.energy !== p.energy ||
+          old.startDate !== p.startDate ||
           old.endDate !== p.endDate ||
           oldPos !== newPos
         ) {
           await db.execute(
-            'UPDATE projects SET name = ?, color = ?, monthly_budget_pm = ?, pinned = ?, energy = ?, end_date = ?, position = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
-            [p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, p.endDate ?? null, newPos, now, dev, id],
+            'UPDATE projects SET name = ?, color = ?, monthly_budget_pm = ?, pinned = ?, energy = ?, start_date = ?, end_date = ?, position = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
+            [p.name, p.color, p.monthlyBudget ?? null, p.pinned ? 1 : 0, p.energy, p.startDate ?? null, p.endDate ?? null, newPos, now, dev, id],
           );
         }
       }

@@ -6,6 +6,15 @@ type Release = {
 
 const RELEASES: readonly Release[] = [
   {
+    version: '0.3.1',
+    date: '2026-05-12',
+    highlights: [
+      '案件に開始日・終了日の期間入力を追加。設定パネルから直接編集 / クリア可能',
+      '終了済の案件が当月のサマリーで誤警告される不具合を修正',
+      '案件のライフサイクル判定を期間ベース (開始日〜終了日) に統一',
+    ],
+  },
+  {
     version: '0.3.0',
     date: '2026-05-11',
     highlights: [

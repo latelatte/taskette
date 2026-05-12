@@ -12,24 +12,30 @@ export type Project = {
   readonly monthlyBudgetOverrides?: Readonly<Record<string, number>>;
   readonly pinned: boolean;
   readonly energy: ProjectEnergy;
+  /** YYYY-MM-DD. The first day the project is active (inclusive). undefined = no explicit start. */
+  readonly startDate?: string;
   /** YYYY-MM-DD. The last day the project is active (inclusive). undefined = ongoing. */
   readonly endDate?: string;
 };
 
 /**
- * A project is active in a given YYYY-MM iff its endDate is unset or its
- * endDate's month >= ym. A project ending mid-month (e.g. 2026-04-15) is still
- * counted as active for the whole of 2026-04 — the user might log work in the
- * end month leading up to the end date.
+ * A project is active in a given YYYY-MM iff its lifetime range
+ * [startDate, endDate] intersects the month. Either bound may be undefined
+ * (= unbounded on that side). A project ending mid-month is still counted
+ * active for the entire month (the user may log work up to the end date).
  */
 export const isProjectActiveInMonth = (p: Project, ym: string): boolean => {
-  if (p.endDate === undefined) return true;
-  return p.endDate.slice(0, 7) >= ym;
+  if (p.endDate !== undefined && p.endDate.slice(0, 7) < ym) return false;
+  if (p.startDate !== undefined && p.startDate.slice(0, 7) > ym) return false;
+  return true;
 };
 
-/** Strict day-precision check. Used by allocation proposal to skip days past endDate. */
-export const isProjectActiveOnDate = (p: Project, date: string): boolean =>
-  p.endDate === undefined || date <= p.endDate;
+/** Strict day-precision check. Used by allocation proposal to skip out-of-range days. */
+export const isProjectActiveOnDate = (p: Project, date: string): boolean => {
+  if (p.endDate !== undefined && date > p.endDate) return false;
+  if (p.startDate !== undefined && date < p.startDate) return false;
+  return true;
+};
 
 export type TaskTemplate = {
   readonly id: string;
