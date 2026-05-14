@@ -466,6 +466,76 @@ describe('SyncOrchestrator.sync', () => {
     expect(deps.storage.state.applyCalls).toBe(2);
   });
 
+  it('published envelope reflects post-apply local state when applyMergeResult skips a row', async () => {
+    // Simulate the H1 race: user edits a row to a higher revision DURING
+    // the sync window. applyMergeResult's revision-guarded UPSERT skips
+    // the merge winner; the orchestrator MUST re-read and publish the
+    // user's edit so remote does not diverge.
+    const presyncRow = row({ id: 'a', revision: 3, updatedAt: 100, updatedByDeviceId: DEV_A });
+    const userEditedRow = row({
+      id: 'a',
+      revision: 5,
+      updatedAt: 500,
+      updatedByDeviceId: DEV_A,
+    });
+    const remoteWinner = row({
+      id: 'a',
+      revision: 4,
+      updatedAt: 300,
+      updatedByDeviceId: DEV_B,
+    });
+    const remoteEnvelope = await buildEnvelope({
+      appVersion: '0.5.0',
+      generation: 1,
+      localDeviceId: DEV_B,
+      tables: { ...emptyTables(), blocks: [remoteWinner] },
+      now: 300,
+    });
+
+    const deps = makeDeps({
+      driveInitial: {
+        content: serializeEnvelope(remoteEnvelope),
+        etag: 'etag-existing',
+        fileId: 'file-existing',
+      },
+      storageInitial: { ...emptyTables(), blocks: [presyncRow] },
+    });
+
+    // Override the storage mock so applyMergeResult flips the table to
+    // the user's during-sync state (revision-guard: incoming rev=4 loses
+    // to local rev=5) and the post-apply re-read sees the user's edit.
+    let readCalls = 0;
+    const orchestrator = new SyncOrchestrator({
+      ...deps,
+      storage: {
+        readAllTables: async () => {
+          readCalls++;
+          // First read = pre-merge snapshot, subsequent = post-apply.
+          return readCalls === 1
+            ? { ...emptyTables(), blocks: [presyncRow] }
+            : { ...emptyTables(), blocks: [userEditedRow] };
+        },
+        applyMergeResult: async () => ({
+          appliedRows: 0,
+          skippedRows: 1,
+          conflictsPersisted: 0,
+        }),
+      },
+    });
+
+    const result = await orchestrator.sync();
+    expect(result.kind).toBe('pushed');
+    expect(readCalls).toBe(2); // pre-merge + post-apply re-read
+
+    // Decode the published envelope and confirm it carries the user's
+    // edit (revision=5), not the merge winner (revision=4).
+    const published = JSON.parse(deps.drive.state.current!.content) as {
+      tables: { blocks: ReadonlyArray<{ revision: number }> };
+    };
+    expect(published.tables.blocks).toHaveLength(1);
+    expect(published.tables.blocks[0]?.revision).toBe(5);
+  });
+
   it('handles all sync tables, not just blocks', async () => {
     const deps = makeDeps({
       storageInitial: {

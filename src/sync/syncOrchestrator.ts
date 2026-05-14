@@ -280,10 +280,13 @@ export class SyncOrchestrator {
         for (const c of result.conflicts) allConflicts.push(c);
       }
 
-      // ---- Atomic apply (merged rows + conflict log in one transaction) ----
-      // The storage adapter (22-C2) wraps both writes in a single SQLite
-      // transaction; either both land or neither does. This eliminates the
-      // race where a winner overwrites local but its loser entry is lost.
+      // ---- Apply (best-effort atomic: conflict log first, then UPSERTs) ----
+      // tauri-plugin-sql 2.x has no explicit transaction API, so storage
+      // adapters fake atomicity via ordering + idempotency: conflict_log
+      // inserts (INSERT OR IGNORE on conflictEventId) come before row
+      // UPSERTs (WHERE pickWinner-tuple-beats-existing). A partial failure
+      // converges on the next sync cycle because both operations are
+      // idempotent on retry.
       try {
         lastReport = await this.deps.storage.applyMergeResult({
           merged: mergedTables as TablesData,
@@ -293,13 +296,27 @@ export class SyncOrchestrator {
         return { kind: 'error', message: `apply merge result: ${(e as Error).message}` };
       }
 
+      // ---- Re-read local for the published envelope ----
+      // applyMergeResult may have *skipped* rows where local already held
+      // a newer LWW tuple than the merge winner (concurrent user edit
+      // during the sync window). Building the envelope from `mergedTables`
+      // would silently omit those edits — remote and local would diverge
+      // intentionally. Reading the post-apply DB picks up both the merge
+      // winners and the preserved local edits.
+      let postApplyTables: TablesData;
+      try {
+        postApplyTables = await this.deps.storage.readAllTables();
+      } catch (e) {
+        return { kind: 'error', message: `re-read local: ${(e as Error).message}` };
+      }
+
       // ---- Build new envelope ----
       const newGeneration = remoteGeneration + 1;
       const newEnvelope = await buildEnvelope({
         appVersion: this.deps.config.appVersion,
         generation: newGeneration,
         localDeviceId: this.deps.config.localDeviceId,
-        tables: mergedTables as TablesData,
+        tables: postApplyTables,
         priorDevices,
         now: now(),
       });
