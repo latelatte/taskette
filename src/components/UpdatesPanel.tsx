@@ -12,7 +12,7 @@ export function UpdatesPanel({ updater }: Props) {
   if (!isSupported) {
     return (
       <div className="text-[13px] text-muted-foreground leading-relaxed">
-        ブラウザ環境ではアップデート確認はご利用いただけません。デスクトップ版でお試しくださいませ。
+        ブラウザ環境ではアップデート確認はご利用いただけません。デスクトップ版でお試しください。
       </div>
     );
   }
@@ -41,14 +41,14 @@ export function UpdatesPanel({ updater }: Props) {
 
       {status.kind === 'idle' && (
         <p className="text-[12px] text-muted-foreground leading-relaxed">
-          起動時に自動で更新を確認しています。手動で確認するには上のボタンを押してくださいませ。
+          起動時に自動で更新を確認しています。手動で確認するには上のボタンを押してください。
         </p>
       )}
 
       {status.kind === 'up-to-date' && (
         <div className="flex items-start gap-2 text-[13px] text-muted-foreground">
           <CheckCircle2 className="size-4 mt-0.5 shrink-0 text-emerald-500" />
-          <span>お使いのバージョンは最新ですわ。</span>
+          <span>お使いのバージョンは最新です。</span>
         </div>
       )}
 
@@ -58,7 +58,7 @@ export function UpdatesPanel({ updater }: Props) {
             <Sparkles className="size-4 mt-0.5 shrink-0 text-amber-500" />
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold">
-                新しいバージョンが利用可能ですわ: v{status.update.version}
+                新しいバージョンが利用可能です: v{status.update.version}
               </div>
               {status.update.date && (
                 <div className="text-[11px] text-muted-foreground mt-0.5">{status.update.date}</div>
@@ -99,7 +99,7 @@ export function UpdatesPanel({ updater }: Props) {
           <div className="flex items-start gap-2">
             <CheckCircle2 className="size-4 mt-0.5 shrink-0 text-emerald-500" />
             <div className="text-[13px]">
-              v{status.update.version} の準備が整いましたわ。再起動でアップデートが適用されます。
+              v{status.update.version} の準備が整いました。再起動でアップデートが適用されます。
             </div>
           </div>
           <Button size="sm" onClick={() => { void relaunchNow(); }}>
@@ -112,14 +112,14 @@ export function UpdatesPanel({ updater }: Props) {
         <div className="flex items-start gap-2 text-[13px] text-destructive">
           <AlertCircle className="size-4 mt-0.5 shrink-0" />
           <div className="space-y-1">
-            <div>更新確認でエラーが発生しましたわ。</div>
+            <div>更新確認でエラーが発生しました。</div>
             <div className="text-[11px] text-muted-foreground break-all">{status.message}</div>
           </div>
         </div>
       )}
 
       <p className="text-[11px] text-muted-foreground leading-relaxed">
-        GitHub Releases から最新版を取得しています。アップデートは署名検証されますの。
+        GitHub Releases から最新版を取得しています。アップデートは署名検証されます。
       </p>
     </div>
   );
