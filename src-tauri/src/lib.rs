@@ -1,3 +1,4 @@
+mod drive;
 mod oauth;
 
 fn migrations() -> Vec<tauri_plugin_sql::Migration> {
@@ -74,6 +75,12 @@ pub fn run() {
       oauth::gcal_oauth_silent_refresh,
       oauth::gcal_oauth_disconnect,
       oauth::gcal_oauth_has_refresh_token,
+      drive::drive_get_current,
+      drive::drive_put_current,
+      drive::drive_create_history,
+      drive::drive_list_history,
+      drive::drive_delete_file,
+      drive::drive_smoke_test,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

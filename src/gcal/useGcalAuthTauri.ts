@@ -8,6 +8,7 @@ const PROACTIVE_REFRESH_MIN_MS = 60_000;
 type OAuthTokens = {
   access_token: string;
   expires_at: number; // Unix epoch seconds
+  granted_scopes: string[]; // populated since Slice 22-B; pre-22-B builds return []
 };
 
 export const useGcalAuthTauri = (): UseGcalAuth => {

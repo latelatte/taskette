@@ -26,7 +26,13 @@ const KEYRING_SERVICE: &str = "ai.latelatte.taskette.google";
 const KEYRING_ACCOUNT: &str = "default";
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly";
+const SCOPE_CALENDAR_READONLY: &str = "https://www.googleapis.com/auth/calendar.readonly";
+const SCOPE_DRIVE_APPDATA: &str = "https://www.googleapis.com/auth/drive.appdata";
+
+// Allowlist guards against a compromised renderer requesting unexpected
+// scopes (e.g. full Drive, Gmail). Any scope outside this set is rejected
+// in `gcal_oauth_connect` before reaching Google's consent screen.
+const ALLOWED_SCOPES: &[&str] = &[SCOPE_CALENDAR_READONLY, SCOPE_DRIVE_APPDATA];
 const LOOPBACK_TIMEOUT_SECS: u64 = 180;
 
 pub struct OAuthState {
@@ -51,6 +57,10 @@ impl Default for OAuthState {
 pub struct OAuthTokens {
     pub access_token: String,
     pub expires_at: i64, // Unix epoch seconds
+    /// Scopes Google actually granted (parsed from token response `scope` field).
+    /// Empty when the server omits the field (rare). Frontend uses this to know
+    /// whether Drive sync is available without a fresh consent flow.
+    pub granted_scopes: Vec<String>,
 }
 
 fn now_unix() -> i64 {
@@ -100,10 +110,23 @@ fn keyring_entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).map_err(|e| e.to_string())
 }
 
+fn scopes_from_token<TT, TF>(tr: &oauth2::StandardTokenResponse<TF, TT>) -> Vec<String>
+where
+    TT: oauth2::TokenType,
+    TF: oauth2::ExtraTokenFields,
+{
+    tr.scopes()
+        .map(|s| s.iter().map(|sc| sc.to_string()).collect())
+        .unwrap_or_default()
+}
+
+// `scopes` is optional: None/empty defaults to calendar.readonly only,
+// preserving existing call sites that don't yet ask for Drive.
 #[tauri::command]
 pub async fn gcal_oauth_connect(
     client_id: String,
     client_secret: Option<String>,
+    scopes: Option<Vec<String>>,
 ) -> Result<OAuthTokens, String> {
     // Reserve a free loopback port. Drop the listener immediately and let
     // tiny_http rebind below — there is a small race window but it is the
@@ -123,13 +146,35 @@ pub async fn gcal_oauth_connect(
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    let (auth_url, csrf_token) = client
+    let requested_scopes: Vec<String> = match scopes {
+        Some(s) if !s.is_empty() => s,
+        _ => vec![SCOPE_CALENDAR_READONLY.to_string()],
+    };
+    // Reject anything outside the allowlist before opening a browser
+    // session. A renderer asking for `drive` or `gmail` is a security
+    // event, not a request to be helpfully forwarded.
+    for scope in &requested_scopes {
+        if !ALLOWED_SCOPES.iter().any(|allowed| allowed == scope) {
+            return Err(format!(
+                "scope not permitted by app: {} (allowed: {})",
+                scope,
+                ALLOWED_SCOPES.join(", ")
+            ));
+        }
+    }
+
+    let mut auth_req = client
         .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new(SCOPE.to_string()))
         .set_pkce_challenge(pkce_challenge)
         .add_extra_param("access_type", "offline")
         .add_extra_param("prompt", "consent")
-        .url();
+        // Preserve previously consented scopes when re-consenting for an
+        // expanded set (e.g. user enables Drive sync after Calendar-only setup).
+        .add_extra_param("include_granted_scopes", "true");
+    for scope in &requested_scopes {
+        auth_req = auth_req.add_scope(Scope::new(scope.clone()));
+    }
+    let (auth_url, csrf_token) = auth_req.url();
 
     webbrowser::open(auth_url.as_str()).map_err(|e| format!("failed to open browser: {}", e))?;
 
@@ -196,25 +241,39 @@ pub async fn gcal_oauth_connect(
         .map_err(|e| format!("token exchange failed: {}", e))?;
 
     let access_token = token_result.access_token().secret().clone();
-    let refresh_token = token_result
-        .refresh_token()
-        .map(|rt| rt.secret().clone())
-        .ok_or_else(|| {
-            "no refresh_token returned (verify access_type=offline + prompt=consent)".to_string()
-        })?;
     let expires_in = token_result
         .expires_in()
         .map(|d| d.as_secs() as i64)
         .unwrap_or(3600);
     let expires_at = now_unix() + expires_in;
+    let granted_scopes = scopes_from_token(&token_result);
 
-    keyring_entry()?
-        .set_password(&refresh_token)
-        .map_err(|e| format!("keyring save failed: {}", e))?;
+    // Google does not guarantee a refresh_token on every consent response,
+    // particularly on incremental consent (e.g. user adding `drive.appdata`
+    // to an existing `calendar.readonly` install). Persist only when one is
+    // actually returned; otherwise keep whatever the keyring already holds
+    // — it remains valid for both old and newly-granted scopes.
+    let entry = keyring_entry()?;
+    match token_result.refresh_token() {
+        Some(rt) => entry
+            .set_password(rt.secret())
+            .map_err(|e| format!("keyring save failed: {}", e))?,
+        None => {
+            let has_existing = matches!(entry.get_password(), Ok(_));
+            if !has_existing {
+                return Err(
+                    "no refresh_token returned and no prior token in keyring \
+                     (verify access_type=offline + prompt=consent)"
+                        .to_string(),
+                );
+            }
+        }
+    }
 
     Ok(OAuthTokens {
         access_token,
         expires_at,
+        granted_scopes,
     })
 }
 
@@ -248,6 +307,7 @@ pub async fn gcal_oauth_silent_refresh(
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(3600);
             let expires_at = now_unix() + expires_in;
+            let granted_scopes = scopes_from_token(&tr);
 
             // Google may rotate refresh tokens; persist the new one if returned.
             if let Some(new_rt) = tr.refresh_token() {
@@ -257,6 +317,7 @@ pub async fn gcal_oauth_silent_refresh(
             Ok(Some(OAuthTokens {
                 access_token,
                 expires_at,
+                granted_scopes,
             }))
         }
         Err(RequestTokenError::ServerResponse(err)) => {
