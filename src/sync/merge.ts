@@ -112,10 +112,19 @@ const conflictEventId = (
 const dedupeBySide = (
   rows: readonly SyncRow[],
   keyFn: (row: SyncRow) => RowKey,
+  table: string,
 ): Map<RowKey, SyncRow> => {
   const map = new Map<RowKey, SyncRow>();
   for (const row of rows) {
     const key = keyFn(row);
+    if (key === '') {
+      // A row with no primary key would silently merge with every other
+      // empty-key row, collapsing distinct entities into one. Either the
+      // envelope is corrupt or a per-table keyFn was misconfigured.
+      throw new Error(
+        `mergeTable: empty rowKey in table '${table}' (likely missing primary key field on row)`,
+      );
+    }
     const existing = map.get(key);
     map.set(key, existing === undefined ? row : pickWinner(existing, row));
   }
@@ -139,8 +148,8 @@ export const mergeTable = (
   remote: readonly SyncRow[],
   ctx: MergeContext,
 ): MergeResult => {
-  const localByKey = dedupeBySide(local, ctx.keyFn);
-  const remoteByKey = dedupeBySide(remote, ctx.keyFn);
+  const localByKey = dedupeBySide(local, ctx.keyFn, ctx.table);
+  const remoteByKey = dedupeBySide(remote, ctx.keyFn, ctx.table);
   const allKeys = new Set<RowKey>([...localByKey.keys(), ...remoteByKey.keys()]);
 
   const merged: SyncRow[] = [];
