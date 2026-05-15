@@ -1,4 +1,5 @@
-// Slice 22-B: Google Drive v3 client for appDataFolder snapshot sync.
+// Slice 22-B / revised 22-C3: Google Drive v3 client for appDataFolder
+// snapshot sync.
 //
 // All operations target the user's hidden appDataFolder (drive.appdata scope).
 // File naming convention (flat, no subfolders — appDataFolder is well suited
@@ -7,18 +8,31 @@
 //   - history-{gen}.json      — rolling backup, one per successful Push gen
 //   - __smoketest__.json      — used only by drive_smoke_test, removed after
 //
-// CAS strategy: each GET returns the file's HTTP ETag. Writes pass it back
-// as `If-Match`; mismatch yields 412 which the caller (22-C) handles by
-// re-Pulling and retrying. Drive API does honor If-Match on both metadata
-// and resumable/multipart uploads — drive_smoke_test verifies this in situ.
+// **CAS strategy (soft, application-level)**: HTTP ETag CAS is unusable
+// because Drive v3 stopped emitting the `ETag` response header on the
+// endpoints we use. Instead we maintain a monotonic counter in the
+// file's `appProperties.taskette_gen` and check it read-then-write:
+//
+//   1. GET appProperties.taskette_gen → current
+//   2. compare with `expected_generation` provided by the caller
+//   3. if equal: PATCH content + appProperties.taskette_gen = current + 1
+//   4. if not: return PRECONDITION_FAILED so caller re-Pulls
+//
+// **Race window**: between step 1 and step 3 (~100-300ms) another device
+// can write without us detecting. v0.5 accepts this as best-effort CAS:
+// row-level LWW merge keeps locally-edited rows in SQLite, so the loser
+// of the race will re-Push them on its next sync cycle. A fully atomic
+// design (per-device log files) is deferred to v0.6.
 //
 // Error encoding: Tauri commands return `Result<T, String>`. Errors are
 // prefixed so the frontend can branch on category:
-//   PRECONDITION_FAILED:  ETag mismatch (412) — caller restarts Pull/merge/Push
+//   PRECONDITION_FAILED:  generation mismatch — caller restarts Pull/merge/Push
+//   CORRUPT_REMOTE:       Drive holds malformed appProperties — manual fix needed
 //   NOT_FOUND:            file missing (404)
 //   UNAUTHORIZED:         expired/revoked token (401) — refresh + retry
 //   FORBIDDEN:            scope missing or quota (403)
 //   RATE_LIMITED:         429 — caller backs off
+//   DUPLICATE_NAME:       two current.json files exist — reconcile + retry
 //   <other>:              generic network/server error
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +46,14 @@ const DRIVE_UPLOAD_API: &str = "https://www.googleapis.com/upload/drive/v3";
 const APP_DATA_FOLDER: &str = "appDataFolder";
 const CURRENT_NAME: &str = "current.json";
 const SMOKETEST_NAME: &str = "__smoketest__.json";
+
+// Soft-CAS marker stored in the file's appProperties. Drive v3 stopped
+// emitting `ETag` HTTP headers on the endpoints we use, so HTTP-level
+// If-Match CAS is unavailable. We maintain a monotonic counter in this
+// metadata field instead and check it (read-then-write) on every update.
+// Race window: ~100-300ms between our pre-write GET and the PATCH; for
+// the v0.5 personal 2-device scope the next CAS cycle catches it.
+const APP_PROP_GEN: &str = "taskette_gen";
 
 static BOUNDARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -68,16 +90,37 @@ async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response, Stri
     ))
 }
 
-/// Pull the `ETag` header out of a response. Drive returns one on every
-/// successful read AND write, including multipart upload responses — see
-/// drive_smoke_test for the in-situ verification. Missing ETag is a hard
-/// error: we never want to silently lose CAS for a subsequent Push.
-fn etag_from_response(resp: &reqwest::Response, ctx: &str) -> Result<String, String> {
-    resp.headers()
-        .get(header::ETAG)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or_else(|| format!("drive {} response missing ETag header", ctx))
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileMetadataWithProps {
+    #[serde(default)]
+    app_properties: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Read our soft-CAS generation counter from the file's appProperties.
+/// Returns "0" when the field is missing (legacy file from before this
+/// scheme, or smoke test seed before the first write).
+async fn read_generation(
+    client: &Client,
+    access_token: &str,
+    file_id: &str,
+) -> Result<String, String> {
+    let resp = client
+        .get(format!("{}/files/{}", DRIVE_API, file_id))
+        .bearer_auth(access_token)
+        .query(&[("fields", "id,appProperties")])
+        .send()
+        .await
+        .map_err(|e| format!("drive read_generation request: {}", e))?;
+    let resp = check_status(resp).await?;
+    let body: FileMetadataWithProps = resp
+        .json()
+        .await
+        .map_err(|e| format!("drive read_generation parse: {}", e))?;
+    Ok(body
+        .app_properties
+        .and_then(|m| m.get(APP_PROP_GEN).cloned())
+        .unwrap_or_else(|| "0".to_string()))
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -113,8 +156,13 @@ pub struct DriveHistoryEntry {
 #[serde(rename_all = "camelCase")]
 pub struct DriveSmokeReport {
     pub created: bool,
-    pub updated_with_correct_etag: bool,
-    pub stale_etag_returned_412: bool,
+    /// PATCH succeeded when caller passed the current generation.
+    pub updated_with_correct_generation: bool,
+    /// PATCH was rejected with PRECONDITION_FAILED when caller passed a
+    /// stale generation. This is the CAS contract we depend on for
+    /// multi-device safety; a `false` here means the entire sync feature
+    /// is unsafe to enable on this build.
+    pub stale_generation_rejected: bool,
     pub cleaned_up: bool,
     pub messages: Vec<String>,
 }
@@ -188,13 +236,14 @@ async fn find_by_name(
         .next())
 }
 
-/// GET a file's contents along with its etag. Caller passes the etag back to
-/// drive_put_current as the CAS token.
+/// GET a file's contents along with its current soft-CAS generation.
+/// Two requests: one for the media body, one for the appProperties.
 async fn get_file_content(
     client: &Client,
     access_token: &str,
     file_id: &str,
 ) -> Result<(String, String), String> {
+    let generation = read_generation(client, access_token, file_id).await?;
     let resp = client
         .get(format!("{}/files/{}", DRIVE_API, file_id))
         .bearer_auth(access_token)
@@ -203,12 +252,11 @@ async fn get_file_content(
         .await
         .map_err(|e| format!("drive get_file_content request: {}", e))?;
     let resp = check_status(resp).await?;
-    let etag = etag_from_response(&resp, "get_file_content")?;
     let content = resp
         .text()
         .await
         .map_err(|e| format!("drive get_file_content body: {}", e))?;
-    Ok((content, etag))
+    Ok((content, generation))
 }
 
 fn build_multipart_body(metadata: &serde_json::Value, content: &str, boundary: &str) -> String {
@@ -258,6 +306,8 @@ fn generate_unique_boundary(content: &str, metadata_str: &str) -> String {
     )
 }
 
+const INITIAL_GENERATION: &str = "1";
+
 async fn upload_create(
     client: &Client,
     access_token: &str,
@@ -267,6 +317,7 @@ async fn upload_create(
     let metadata = json!({
         "name": name,
         "parents": [APP_DATA_FOLDER],
+        "appProperties": { APP_PROP_GEN: INITIAL_GENERATION },
     });
     let metadata_str = serde_json::to_string(&metadata)
         .expect("serializing controlled metadata never fails");
@@ -287,11 +338,6 @@ async fn upload_create(
         .map_err(|e| format!("drive upload_create request: {}", e))?;
     let resp = check_status(resp).await?;
 
-    // Read ETag from the upload response itself — a separate post-write
-    // GET would race against concurrent updates by another device. Drive's
-    // upload endpoint sets ETag on the response; drive_smoke_test
-    // (Critical from design review) verifies this contract per release.
-    let etag = etag_from_response(&resp, "upload_create")?;
     #[derive(Deserialize)]
     struct CreateResp {
         id: String,
@@ -302,7 +348,7 @@ async fn upload_create(
         .map_err(|e| format!("drive upload_create parse: {}", e))?;
     Ok(DrivePutResult {
         file_id: create.id,
-        etag,
+        etag: INITIAL_GENERATION.to_string(),
     })
 }
 
@@ -311,9 +357,39 @@ async fn upload_update_with_cas(
     access_token: &str,
     file_id: &str,
     content: &str,
-    if_match_etag: &str,
+    expected_generation: &str,
 ) -> Result<DrivePutResult, String> {
-    let metadata = json!({});
+    // Soft CAS: read current generation, abort if it doesn't match what
+    // the caller expects. Race window is open between this read and the
+    // PATCH below (~100-300ms); see the APP_PROP_GEN comment.
+    let current_gen = read_generation(client, access_token, file_id).await?;
+    if current_gen != expected_generation {
+        return Err(format!(
+            "PRECONDITION_FAILED: appProperties.{} mismatch (expected={}, drive={})",
+            APP_PROP_GEN, expected_generation, current_gen
+        ));
+    }
+    // Defensive parse: a non-integer `taskette_gen` indicates either
+    // schema corruption or external editing of the metadata. Falling
+    // back to "0" silently would regress the counter and re-validate
+    // stale tokens. Hard-fail instead.
+    let current_n = current_gen.parse::<i64>().map_err(|_| {
+        format!(
+            "CORRUPT_REMOTE: appProperties.{} = {:?} is not an integer",
+            APP_PROP_GEN, current_gen
+        )
+    })?;
+    let next_n = current_n.checked_add(1).ok_or_else(|| {
+        format!(
+            "CORRUPT_REMOTE: appProperties.{} ({}) overflowed i64 on increment",
+            APP_PROP_GEN, current_n
+        )
+    })?;
+    let new_gen = next_n.to_string();
+
+    let metadata = json!({
+        "appProperties": { APP_PROP_GEN: new_gen.clone() },
+    });
     let metadata_str = serde_json::to_string(&metadata)
         .expect("serializing controlled metadata never fails");
     let boundary = generate_unique_boundary(content, &metadata_str);
@@ -327,14 +403,12 @@ async fn upload_update_with_cas(
             header::CONTENT_TYPE,
             format!("multipart/related; boundary={}", boundary),
         )
-        .header(header::IF_MATCH, if_match_etag)
         .body(body)
         .send()
         .await
         .map_err(|e| format!("drive upload_update request: {}", e))?;
     let resp = check_status(resp).await?;
 
-    let etag = etag_from_response(&resp, "upload_update")?;
     #[derive(Deserialize)]
     struct UpdateResp {
         id: String,
@@ -345,7 +419,7 @@ async fn upload_update_with_cas(
         .map_err(|e| format!("drive upload_update parse: {}", e))?;
     Ok(DrivePutResult {
         file_id: updated.id,
-        etag,
+        etag: new_gen,
     })
 }
 
@@ -507,57 +581,88 @@ async fn run_smoke_test_steps(
         }
     };
     report.created = true;
-    report.messages.push(format!("created id={}", created.file_id));
-    let first_etag = created.etag.clone();
+    report.messages.push(format!(
+        "created id={} with generation={}",
+        created.file_id, created.etag
+    ));
+    let first_gen = created.etag.clone();
     let file_id = created.file_id.clone();
 
-    // 2) Update with the correct (fresh) etag — must succeed.
-    match upload_update_with_cas(client, access_token, &file_id, "{\"smoke\":2}", &first_etag).await
-    {
-        Ok(u) => {
-            report.updated_with_correct_etag = true;
+    // 1b) Post-create verification: confirm the appProperties counter
+    // actually landed at INITIAL_GENERATION. Without this a silently-
+    // dropped appProperties (e.g. wrong fields filter on create) would
+    // surface as a confusing PRECONDITION_FAILED in step 2.
+    match read_generation(client, access_token, &file_id).await {
+        Ok(gen) if gen == first_gen => {
             report
                 .messages
-                .push(format!("fresh-etag update ok, new etag={}", u.etag));
+                .push(format!("post-create generation verified = {}", gen));
+        }
+        Ok(gen) => {
+            report.messages.push(format!(
+                "post-create generation mismatch (created with {}, drive returned {})",
+                first_gen, gen
+            ));
+            return Some(file_id);
         }
         Err(e) => {
             report
                 .messages
-                .push(format!("fresh-etag update unexpectedly failed: {}", e));
+                .push(format!("post-create read_generation failed: {}", e));
             return Some(file_id);
         }
     }
 
-    // 3) Update with the now-stale etag — must 412.
-    match upload_update_with_cas(client, access_token, &file_id, "{\"smoke\":3}", &first_etag).await
+    // 2) Update with the correct (fresh) generation — must succeed.
+    match upload_update_with_cas(client, access_token, &file_id, "{\"smoke\":2}", &first_gen).await
     {
-        Err(e) if e.starts_with("PRECONDITION_FAILED:") => {
-            report.stale_etag_returned_412 = true;
+        Ok(u) => {
+            report.updated_with_correct_generation = true;
             report
                 .messages
-                .push("stale-etag update correctly returned 412".to_string());
-        }
-        Ok(_) => {
-            report
-                .messages
-                .push("stale-etag update unexpectedly succeeded — CAS NOT enforced".to_string());
+                .push(format!("fresh-generation update ok, new gen={}", u.etag));
         }
         Err(e) => {
             report
                 .messages
-                .push(format!("stale-etag update errored (not 412): {}", e));
+                .push(format!("fresh-generation update unexpectedly failed: {}", e));
+            return Some(file_id);
+        }
+    }
+
+    // 3) Update with the now-stale generation — must be rejected.
+    match upload_update_with_cas(client, access_token, &file_id, "{\"smoke\":3}", &first_gen).await
+    {
+        Err(e) if e.starts_with("PRECONDITION_FAILED:") => {
+            report.stale_generation_rejected = true;
+            report
+                .messages
+                .push("stale-generation update correctly rejected".to_string());
+        }
+        Ok(_) => {
+            report
+                .messages
+                .push("stale-generation update unexpectedly succeeded — CAS NOT enforced".to_string());
+        }
+        Err(e) => {
+            report.messages.push(format!(
+                "stale-generation update errored (not PRECONDITION_FAILED): {}",
+                e
+            ));
         }
     }
 
     Some(file_id)
 }
 
-/// In-situ smoke test for the If-Match (412) contract on the multipart
-/// upload endpoint. Creates `__smoketest__.json`, updates it with the
-/// current etag (must succeed), then updates again with a stale etag (must
-/// 412), then deletes. Each step's outcome is reported.
+/// In-situ smoke test for the soft-CAS (generation counter) contract on
+/// the multipart upload endpoint. Creates `__smoketest__.json`, verifies
+/// the generation landed correctly, updates with the fresh generation
+/// (must succeed), updates again with a stale generation (must be
+/// rejected as PRECONDITION_FAILED), then deletes. Each step's outcome
+/// is reported.
 ///
-/// Caller (22-C) must treat `staleEtagReturned412 == false` as a hard
+/// Caller (22-C) must treat `staleGenerationRejected == false` as a hard
 /// failure and refuse to enable Drive sync — that would mean the entire
 /// CAS strategy is unenforced on this Drive deployment.
 #[tauri::command]

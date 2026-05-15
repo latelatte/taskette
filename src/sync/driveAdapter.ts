@@ -27,6 +27,7 @@
 import {
   driveGetCurrent,
   drivePutCurrent,
+  isDriveErrorKind,
   type DriveSnapshot,
 } from './driveClient.js';
 import type {
@@ -35,33 +36,50 @@ import type {
   DrivePutResultForSync,
 } from './syncOrchestrator.js';
 
-export type AccessTokenSource = () => Promise<string>;
+/**
+ * `forceRefresh` asks the source to bypass any cached token and obtain a
+ * fresh one from the underlying refresh-token flow. The adapter sets it
+ * when a Drive call returns 401, which can happen if the cached token
+ * expired silently between Pull and Push.
+ */
+export type AccessTokenSource = (opts?: { readonly forceRefresh?: boolean }) => Promise<string>;
 
 const toSnapshot = (s: DriveSnapshot | null): DriveSnapshotForSync | null =>
   s === null ? null : { content: s.content, etag: s.etag, fileId: s.fileId };
+
+const isUnauthorized = (e: unknown): boolean => isDriveErrorKind(e, 'UNAUTHORIZED');
 
 export const createDriveAdapter = (getToken: AccessTokenSource): DriveClientDeps => {
   let capturedToken: string | null = null;
   return {
     getCurrent: async (): Promise<DriveSnapshotForSync | null> => {
-      // Refresh the capture at every Pull. Within one CAS retry loop
-      // this re-uses the same access token across getCurrent/putCurrent
-      // pairs; across retries each Pull picks up whatever the auth hook
-      // currently holds (refreshed transparently on 401).
       capturedToken = await getToken();
-      return toSnapshot(await driveGetCurrent(capturedToken));
+      try {
+        return toSnapshot(await driveGetCurrent(capturedToken));
+      } catch (e) {
+        if (!isUnauthorized(e)) throw e;
+        // Token expired silently between proactive refresh and our call.
+        // Force a fresh one and retry once. A second 401 is fatal.
+        capturedToken = await getToken({ forceRefresh: true });
+        return toSnapshot(await driveGetCurrent(capturedToken));
+      }
     },
     putCurrent: async (
       content: string,
       fileId: string | null,
       ifMatchEtag: string | null,
     ): Promise<DrivePutResultForSync> => {
-      // Fallback to a fresh fetch only if the caller skipped Pull (e.g.
-      // a unit test driving putCurrent directly). Production paths always
-      // call getCurrent first.
       const token = capturedToken ?? (await getToken());
-      const result = await drivePutCurrent(token, content, fileId, ifMatchEtag);
-      return { fileId: result.fileId, etag: result.etag };
+      try {
+        const result = await drivePutCurrent(token, content, fileId, ifMatchEtag);
+        return { fileId: result.fileId, etag: result.etag };
+      } catch (e) {
+        if (!isUnauthorized(e)) throw e;
+        const fresh = await getToken({ forceRefresh: true });
+        capturedToken = fresh;
+        const result = await drivePutCurrent(fresh, content, fileId, ifMatchEtag);
+        return { fileId: result.fileId, etag: result.etag };
+      }
     },
   };
 };

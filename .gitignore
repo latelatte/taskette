@@ -228,10 +228,6 @@ coverage/
 .env.local
 .env.*.local
 
-# Audio files
-*.mp3
-*.wav
-
 # IDE
 .vscode/
 .idea/

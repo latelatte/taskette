@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import {
   DndContext,
   KeyboardSensor,
@@ -78,6 +78,8 @@ import { KeyboardHelpDialog } from './components/KeyboardHelpDialog.js';
 import { HelpPanel } from './components/HelpPanel.js';
 import { ReleaseNotesPanel } from './components/ReleaseNotesPanel.js';
 import { UpdatesPanel } from './components/UpdatesPanel.js';
+import { DriveSyncPanel } from './components/DriveSyncPanel.js';
+import { useDriveSync } from './sync/useDriveSync.js';
 import { useUpdater } from './updater.js';
 import {
   getNotificationPermission,
@@ -136,7 +138,7 @@ const SETTINGS_TITLES: Record<SettingsView, string> = {
   menu: '設定',
   general: '一般',
   projects: '案件設定',
-  gcal: 'Google Calendar 連携',
+  gcal: 'Google 連携',
   'gcal-hidden': '非表示中のイベント',
   'gcal-rules': '同名予定ルール',
   data: 'データ移行',
@@ -231,6 +233,26 @@ export function App() {
   const [importError, setImportError] = useState<string | null>(null);
 
   const gcalAuth = useGcalAuth();
+  // Reload local state from SQLite after every Drive sync attempt.
+  // Drive sync writes merged rows directly into the same tables that
+  // App reads via loadStore — without this, the next user edit would
+  // diff against pre-sync `cachedState` and silently revert remote
+  // changes (Codex Critical, 22-C3 review).
+  const reloadFromStorage = useCallback(async () => {
+    try {
+      const stored = await loadStore();
+      setBlocksByDate(stored.blocksByDate);
+      setProjects(stored.projects);
+      setTemplates(stored.templates);
+      setGcalAssignments(stored.gcalAssignments);
+      setGcalSummaryRules(stored.gcalSummaryRules);
+    } catch (e) {
+      setError(`reload after sync: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, []);
+  const driveSync = useDriveSync(gcalAuth, updater.appVersion ?? '0.0.0', {
+    onSyncCompleted: reloadFromStorage,
+  });
   const gcalCalendars = useGcalCalendarList(gcalAuth.accessToken);
   const [selectedCalendarId, setSelectedCalendarIdState] = useState<string | null>(() => {
     try {
@@ -1682,7 +1704,7 @@ export function App() {
               {[
                 { key: 'general' as const, label: '一般', desc: '通知音などのアプリ全体の設定' },
                 { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算、ピン留め、負荷' },
-                { key: 'gcal' as const, label: 'Google Calendar 連携', desc: '打ち合わせ予定を取り込んで工数集計に含める' },
+                { key: 'gcal' as const, label: 'Google 連携', desc: 'Calendar の予定取り込みと、Drive 経由でのマルチデバイス同期' },
                 { key: 'data' as const, label: 'データ移行', desc: 'ブラウザ localStorage から JSON で取り込み（上書き）' },
                 { key: 'updates' as const, label: 'アップデート', desc: `現在 v${updater.appVersion ?? '—'}・新しいバージョンを確認` },
                 { key: 'help' as const, label: '使い方', desc: '基本操作とショートカットの早見表' },
@@ -2107,6 +2129,11 @@ export function App() {
                   )}
                 </div>
               )}
+
+              <div className="border-t border-border pt-5">
+                <div className="text-[13px] font-semibold mb-3">Drive 同期</div>
+                <DriveSyncPanel sync={driveSync} />
+              </div>
             </div>
           )}
 

@@ -6,6 +6,15 @@ type Release = {
 
 const RELEASES: readonly Release[] = [
   {
+    version: '0.5.0',
+    date: '2026-05-15',
+    highlights: [
+      '複数デバイス間のデータ同期に対応。設定 > Google 連携 で「Drive 同期」を有効化すると、ブロック・案件・テンプレートが他の端末と自動で揃います',
+      '別の端末と同じ行を同時に編集した場合は、最後に編集した内容が優先されます',
+      'Google Calendar 連携と Drive 同期を「Google 連携」ページにまとめて整理しました',
+    ],
+  },
+  {
     version: '0.4.1',
     date: '2026-05-12',
     highlights: [

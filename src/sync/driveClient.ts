@@ -15,6 +15,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export const SCOPE_DRIVE_APPDATA = 'https://www.googleapis.com/auth/drive.appdata';
+export const SCOPE_CALENDAR_READONLY = 'https://www.googleapis.com/auth/calendar.readonly';
 
 export type DriveErrorKind =
   | 'PRECONDITION_FAILED'
@@ -49,8 +50,11 @@ export type DriveHistoryEntry = {
 
 export type DriveSmokeReport = {
   readonly created: boolean;
-  readonly updatedWithCorrectEtag: boolean;
-  readonly staleEtagReturned412: boolean;
+  readonly updatedWithCorrectGeneration: boolean;
+  /** Stale-generation update was rejected with PRECONDITION_FAILED. The
+   * field name historically said "etag/412" but the CAS contract is now
+   * application-level (appProperties.taskette_gen counter). */
+  readonly staleGenerationRejected: boolean;
   readonly cleanedUp: boolean;
   readonly messages: readonly string[];
 };
@@ -108,10 +112,11 @@ export const driveDeleteFile = async (accessToken: string, fileId: string): Prom
   invoke<void>('drive_delete_file', { accessToken, fileId });
 
 /**
- * Verify the live Drive API still enforces If-Match (412) on the multipart
- * upload endpoint. Creates a throwaway file, exercises CAS in both fresh
- * and stale states, then cleans up. Intended to be run once per build by
- * a developer / release pipeline — not on every sync.
+ * Verify the live Drive deployment still honors our soft-CAS contract
+ * (generation counter via appProperties.taskette_gen). Creates a
+ * throwaway file, exercises both fresh and stale generation updates,
+ * then cleans up. Intended to be run before enabling Drive sync — not
+ * on every sync.
  */
 export const driveSmokeTest = async (accessToken: string): Promise<DriveSmokeReport> =>
   invoke<DriveSmokeReport>('drive_smoke_test', { accessToken });
