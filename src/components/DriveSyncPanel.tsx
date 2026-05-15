@@ -120,8 +120,8 @@ export const DriveSyncPanel = ({ sync }: Props): JSX.Element => {
     switch (sync.lastResult.kind) {
       case 'pushed':
         return sync.lastResult.conflicts === 0
-          ? `世代 ${sync.lastResult.newGeneration} を公開しました`
-          : `世代 ${sync.lastResult.newGeneration} を公開（競合 ${sync.lastResult.conflicts} 件）`;
+          ? 'アップロードしました'
+          : `アップロードしました（競合 ${sync.lastResult.conflicts} 件を解決）`;
       case 'duplicate-detected':
         return '同期ファイルが重複しています。手動で整理が必要です';
       case 'schema-refused':

@@ -78,6 +78,7 @@ import { KeyboardHelpDialog } from './components/KeyboardHelpDialog.js';
 import { HelpPanel } from './components/HelpPanel.js';
 import { ReleaseNotesPanel } from './components/ReleaseNotesPanel.js';
 import { UpdatesPanel } from './components/UpdatesPanel.js';
+import { UpdateAvailableDialog } from './components/UpdateAvailableDialog.js';
 import { DriveSyncPanel } from './components/DriveSyncPanel.js';
 import { useDriveSync } from './sync/useDriveSync.js';
 import { useUpdater } from './updater.js';
@@ -1678,6 +1679,8 @@ export function App() {
           />
         )}
       </main>
+
+      <UpdateAvailableDialog updater={updater} />
 
       <Dialog open={showSettings} onOpenChange={(open) => { if (!open) closeSettings(); }}>
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-auto">
