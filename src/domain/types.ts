@@ -55,8 +55,8 @@ export type TimeBlock = {
   readonly source?: 'gcal';
   readonly gcalKey?: string; // assignments の lookup キー (単発は eventId、繰り返しは parent recurringEventId)
   readonly gcalRecurring?: true;
-  /** 開始 N 分前に通知。undefined = 通知なし、0 = 開始時。 */
-  readonly notifyOffsetMin?: number;
+  /** 開始 N 分前に通知。複数指定可 (例: [1, 5])。undefined/[] = 通知なし、0 = 開始時。 */
+  readonly notifyOffsetsMin?: readonly number[];
 };
 
 export type GcalAssignment = {

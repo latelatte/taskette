@@ -90,6 +90,12 @@ import {
   type NotifyPermission,
 } from './notifications.js';
 import { SOUNDS, loadSelectedSoundId, saveSelectedSoundId } from './sounds.js';
+import {
+  NOTIFY_PRESETS,
+  loadDefaultNotifyOffsets,
+  saveDefaultNotifyOffsets,
+  normalizeNotifyOffsets,
+} from './notify.js';
 
 const SELECTED_CALENDAR_KEY = 'taskette/gcal-calendar-id';
 
@@ -120,18 +126,9 @@ type BlockEditState = {
   readonly source: 'native' | 'gcal';
   readonly gcalKey?: string;
   readonly gcalRecurring?: true;
-  /** Select 用文字列。'' = 通知なし、それ以外は分数の文字列 ('0', '5', '10' ...) */
-  readonly notifyOffset: string;
+  /** 通知タイミング (開始何分前)。複数指定可。空配列 = 通知なし。 */
+  readonly notifyOffsets: readonly number[];
 };
-
-const NOTIFY_OPTIONS: readonly { readonly value: string; readonly label: string }[] = [
-  { value: '0', label: '開始時' },
-  { value: '5', label: '5分前' },
-  { value: '10', label: '10分前' },
-  { value: '15', label: '15分前' },
-  { value: '30', label: '30分前' },
-  { value: '60', label: '1時間前' },
-];
 
 type SettingsView = 'menu' | 'general' | 'projects' | 'gcal' | 'gcal-hidden' | 'gcal-rules' | 'data' | 'updates' | 'help' | 'releases';
 
@@ -215,6 +212,14 @@ export function App() {
   const setSelectedSoundId = (id: string): void => {
     setSelectedSoundIdState(id);
     saveSelectedSoundId(id);
+  };
+  const [defaultNotifyOffsets, setDefaultNotifyOffsetsState] = useState<readonly number[]>(
+    () => loadDefaultNotifyOffsets(),
+  );
+  const setDefaultNotifyOffsets = (offsets: readonly number[]): void => {
+    const norm = normalizeNotifyOffsets(offsets);
+    setDefaultNotifyOffsetsState(norm);
+    saveDefaultNotifyOffsets(norm);
   };
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectBudget, setNewProjectBudget] = useState('');
@@ -557,6 +562,13 @@ export function App() {
     const hasIndividualAssignment = isGcal && block.gcalKey !== undefined && gcalAssignments[block.gcalKey] !== undefined;
     setEditApplyToAllSameSummary(isGcal && !hasIndividualAssignment);
     inCreateEditFlowRef.current = opts?.justCreated === true;
+    const notifyOffsets = isGcal
+      ? []
+      : block.notifyOffsetsMin !== undefined
+        ? [...block.notifyOffsetsMin]
+        : opts?.justCreated === true
+          ? [...defaultNotifyOffsets]
+          : [];
     setBlockEdit({
       blockId: block.id,
       label: block.label,
@@ -564,7 +576,7 @@ export function App() {
       durationMin: String(block.durationMin),
       projectId: block.projectId ?? '',
       source: isGcal ? 'gcal' : 'native',
-      notifyOffset: block.notifyOffsetMin !== undefined ? String(block.notifyOffsetMin) : '',
+      notifyOffsets,
       ...(block.gcalKey !== undefined ? { gcalKey: block.gcalKey } : {}),
       ...(block.gcalRecurring === true ? { gcalRecurring: true as const } : {}),
     });
@@ -575,6 +587,29 @@ export function App() {
     inCreateEditFlowRef.current = false;
     setBlockEdit(null);
     setError(null);
+  };
+
+  // スライダー/ホイールから時間 (分) を相対調整。1〜1440 にクランプ。
+  const adjustBlockDuration = (deltaMin: number): void => {
+    setBlockEdit((prev) => {
+      if (prev === null || prev.source === 'gcal') return prev;
+      const cur = parseInt(prev.durationMin, 10);
+      const base = Number.isFinite(cur) ? cur : 0;
+      const next = Math.min(1440, Math.max(1, base + deltaMin));
+      return { ...prev, durationMin: String(next) };
+    });
+  };
+
+  // 通知プリセットの ON/OFF をトグル (複数同時指定可)。
+  const toggleNotifyOffset = (value: number): void => {
+    if (blockEdit === null) return;
+    const has = blockEdit.notifyOffsets.includes(value);
+    const next = has
+      ? blockEdit.notifyOffsets.filter((v) => v !== value)
+      : normalizeNotifyOffsets([...blockEdit.notifyOffsets, value]);
+    setBlockEdit({ ...blockEdit, notifyOffsets: next });
+    // 新たに有効化した時のみ通知許可を要求。
+    if (!has) void requestNotificationPermission().then(setNotifyPermission);
   };
 
   const saveBlockEdit = (): void => {
@@ -653,8 +688,7 @@ export function App() {
       closeBlockEdit();
       return;
     }
-    const notifyOffsetMin =
-      blockEdit.notifyOffset === '' ? undefined : parseInt(blockEdit.notifyOffset, 10);
+    const notifyOffsetsMin = normalizeNotifyOffsets(blockEdit.notifyOffsets);
     const newBlock: TimeBlock = {
       id: original.id,
       label: trimmedLabel,
@@ -662,9 +696,7 @@ export function App() {
       durationMin: dur,
       ...(original.templateId !== undefined ? { templateId: original.templateId } : {}),
       ...(blockEdit.projectId !== '' ? { projectId: blockEdit.projectId } : {}),
-      ...(notifyOffsetMin !== undefined && Number.isFinite(notifyOffsetMin)
-        ? { notifyOffsetMin }
-        : {}),
+      ...(notifyOffsetsMin.length > 0 ? { notifyOffsetsMin } : {}),
     };
 
     const others = dayBlocks.filter((b) => b.id !== blockEdit.blockId);
@@ -1705,7 +1737,7 @@ export function App() {
           {settingsView === 'menu' && (
             <div className="flex flex-col gap-2">
               {[
-                { key: 'general' as const, label: '一般', desc: '通知音などのアプリ全体の設定' },
+                { key: 'general' as const, label: '一般', desc: '通知音・デフォルト通知などのアプリ全体の設定' },
                 { key: 'projects' as const, label: '案件設定', desc: '案件の追加・編集・削除、月予算、ピン留め、負荷' },
                 { key: 'gcal' as const, label: 'Google 連携', desc: 'Calendar の予定取り込みと、Drive 経由でのマルチデバイス同期' },
                 { key: 'data' as const, label: 'データ移行', desc: 'ブラウザ localStorage から JSON で取り込み（上書き）' },
@@ -1770,6 +1802,39 @@ export function App() {
                   <code className="bg-muted px-1 rounded">public/sounds/</code> に置いて{' '}
                   <code className="bg-muted px-1 rounded">src/sounds.ts</code>{' '}
                   に登録してくださいませ。詳細は同ディレクトリ内 README に。
+                </p>
+              </div>
+
+              <div>
+                <Label className="text-[11px] text-muted-foreground flex items-center gap-1.5 mb-2">
+                  <Bell className="size-3" /> デフォルト通知
+                  <span className="text-muted-foreground/70">(複数選択可)</span>
+                </Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {NOTIFY_PRESETS.map((preset) => {
+                    const active = defaultNotifyOffsets.includes(preset.value);
+                    return (
+                      <Button
+                        key={preset.value}
+                        type="button"
+                        variant={active ? 'default' : 'outline'}
+                        size="xs"
+                        aria-pressed={active}
+                        onClick={() => {
+                          const next = active
+                            ? defaultNotifyOffsets.filter((v) => v !== preset.value)
+                            : [...defaultNotifyOffsets, preset.value];
+                          setDefaultNotifyOffsets(next);
+                          if (!active) void requestNotificationPermission().then(setNotifyPermission);
+                        }}
+                      >
+                        {preset.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-2 leading-relaxed">
+                  新しく作成したブロックに、ここで選んだ通知タイミングが初期設定されます。各ブロックの編集画面で個別に変更できます。
                 </p>
               </div>
             </div>
@@ -2335,7 +2400,17 @@ export function App() {
                   <div className="text-xs text-muted-foreground py-2">案件が登録されておりません</div>
                 ) : (
                   <div className="flex flex-col gap-3.5">
-                    {projects.filter((p) => isProjectActiveInMonth(p, ym)).map((p) => {
+                    {projects
+                      .filter((p) => isProjectActiveInMonth(p, ym))
+                      // 工数 (今月予算) が設定された有償案件を上に、未設定の社内案件を下に。
+                      // 同一グループ内は元の並び順を維持 (Array.sort は stable)。
+                      .slice()
+                      .sort((a, b) => {
+                        const ra = effectiveBudgetPM(a, ym) !== undefined ? 0 : 1;
+                        const rb = effectiveBudgetPM(b, ym) !== undefined ? 0 : 1;
+                        return ra - rb;
+                      })
+                      .map((p) => {
                       const minutes = aggregate.byProject.get(p.id) ?? 0;
                       const u = projectBudgetUsage(p, minutes, elapsed, ym, todayDateStr);
                       const effectivePM = effectiveBudgetPM(p, ym);
@@ -2528,31 +2603,47 @@ export function App() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="be-start" className="text-[11px] text-muted-foreground">開始</Label>
-                  <Input
-                    id="be-start"
-                    type="time"
-                    disabled={blockEdit.source === 'gcal'}
-                    value={blockEdit.startHHMM}
-                    onChange={(e) => setBlockEdit({ ...blockEdit, startHHMM: e.target.value })}
-                    step={900}
-                  />
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="be-start" className="text-[11px] text-muted-foreground">開始</Label>
+                    <Input
+                      id="be-start"
+                      type="time"
+                      disabled={blockEdit.source === 'gcal'}
+                      value={blockEdit.startHHMM}
+                      onChange={(e) => setBlockEdit({ ...blockEdit, startHHMM: e.target.value })}
+                      step={900}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="be-dur" className="text-[11px] text-muted-foreground">時間 (分)</Label>
+                    <Input
+                      id="be-dur"
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={5}
+                      disabled={blockEdit.source === 'gcal'}
+                      value={blockEdit.durationMin}
+                      onChange={(e) => setBlockEdit({ ...blockEdit, durationMin: e.target.value })}
+                      onWheel={(e) => { if (blockEdit.source !== 'gcal') adjustBlockDuration(e.deltaY < 0 ? 5 : -5); }}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="be-dur" className="text-[11px] text-muted-foreground">時間 (分)</Label>
-                  <Input
-                    id="be-dur"
-                    type="number"
-                    min={1}
-                    max={1440}
+                {blockEdit.source !== 'gcal' && (
+                  <input
+                    type="range"
+                    aria-label="時間 (分) スライダー"
+                    min={5}
+                    max={480}
                     step={5}
-                    disabled={blockEdit.source === 'gcal'}
-                    value={blockEdit.durationMin}
+                    value={Math.min(480, Math.max(5, parseInt(blockEdit.durationMin, 10) || 5))}
                     onChange={(e) => setBlockEdit({ ...blockEdit, durationMin: e.target.value })}
+                    onWheel={(e) => adjustBlockDuration(e.deltaY < 0 ? 5 : -5)}
+                    className="w-full accent-primary cursor-pointer"
                   />
-                </div>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -2592,35 +2683,28 @@ export function App() {
 
               {blockEdit.source === 'native' && (
                 <div className="space-y-1.5">
-                  <Label
-                    htmlFor="be-notify"
-                    className="text-[11px] text-muted-foreground flex items-center gap-1.5"
-                  >
+                  <Label className="text-[11px] text-muted-foreground flex items-center gap-1.5">
                     <Bell className="size-3" /> 通知
+                    <span className="text-muted-foreground/70">(複数選択可)</span>
                   </Label>
-                  <Select
-                    value={blockEdit.notifyOffset === '' ? '__none__' : blockEdit.notifyOffset}
-                    onValueChange={(v) => {
-                      const value = v === '__none__' ? '' : v;
-                      setBlockEdit({ ...blockEdit, notifyOffset: value });
-                      if (value !== '') {
-                        void requestNotificationPermission().then(setNotifyPermission);
-                      }
-                    }}
-                  >
-                    <SelectTrigger id="be-notify" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">通知しない</SelectItem>
-                      {NOTIFY_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {blockEdit.notifyOffset !== '' && notifyPermission === 'denied' && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {NOTIFY_PRESETS.map((preset) => {
+                      const active = blockEdit.notifyOffsets.includes(preset.value);
+                      return (
+                        <Button
+                          key={preset.value}
+                          type="button"
+                          variant={active ? 'default' : 'outline'}
+                          size="xs"
+                          aria-pressed={active}
+                          onClick={() => toggleNotifyOffset(preset.value)}
+                        >
+                          {preset.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  {blockEdit.notifyOffsets.length > 0 && notifyPermission === 'denied' && (
                     <p className="text-[11px] text-destructive">
                       通知が拒否されています。システム設定 → 通知 で taskette を許可してくださいませ。
                     </p>

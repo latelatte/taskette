@@ -2,6 +2,7 @@ import Database from '@tauri-apps/plugin-sql';
 import type { DateString, GcalAssignment, Project, ProjectEnergy, TaskTemplate, TimeBlock } from './domain/types.js';
 import { DEFAULT_PROJECTS } from './projects.js';
 import { DEFAULT_TEMPLATES } from './templates.js';
+import { decodeNotifyOffsets, encodeNotifyOffsets, normalizeNotifyOffsets, notifyOffsetsEqual } from './notify.js';
 
 const isProjectEnergy = (v: unknown): v is ProjectEnergy =>
   v === 'low' || v === 'mid' || v === 'high';
@@ -60,6 +61,19 @@ const emptyState = (): StoredState => ({
   gcalSummaryRules: {},
 });
 
+/**
+ * 旧フォーマット (v0.5.x 以前) の単一値 `notifyOffsetMin` を、複数値
+ * `notifyOffsetsMin` 配列へ移行する。JSON インポート時の後方互換用。
+ */
+const migrateLegacyBlockNotify = (v: unknown): unknown => {
+  if (typeof v !== 'object' || v === null) return v;
+  const o = v as Record<string, unknown>;
+  if (o.notifyOffsetsMin !== undefined) return v;
+  if (typeof o.notifyOffsetMin !== 'number') return v;
+  const { notifyOffsetMin, ...rest } = o;
+  return { ...rest, notifyOffsetsMin: normalizeNotifyOffsets([notifyOffsetMin]) };
+};
+
 const isTimeBlock = (v: unknown): v is TimeBlock => {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
@@ -73,14 +87,11 @@ const isTimeBlock = (v: unknown): v is TimeBlock => {
   if (o.source !== undefined && o.source !== 'gcal') return false;
   if (o.gcalKey !== undefined && typeof o.gcalKey !== 'string') return false;
   if (o.gcalRecurring !== undefined && o.gcalRecurring !== true) return false;
-  if (
-    o.notifyOffsetMin !== undefined &&
-    (typeof o.notifyOffsetMin !== 'number' ||
-      !Number.isFinite(o.notifyOffsetMin) ||
-      o.notifyOffsetMin < 0 ||
-      o.notifyOffsetMin > 24 * 60)
-  ) {
-    return false;
+  if (o.notifyOffsetsMin !== undefined) {
+    if (!Array.isArray(o.notifyOffsetsMin)) return false;
+    for (const n of o.notifyOffsetsMin) {
+      if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > 24 * 60) return false;
+    }
   }
   return true;
 };
@@ -204,6 +215,7 @@ const parseStoredPayload = (parsed: unknown): StoredState | null => {
     for (const [date, dayBlocks] of Object.entries(obj.blocksByDate)) {
       if (!Array.isArray(dayBlocks)) continue;
       const valid = dayBlocks
+        .map(migrateLegacyBlockNotify)
         .filter(isTimeBlock)
         .map((b) =>
           b.projectId !== undefined && !validProjectIds.has(b.projectId)
@@ -434,7 +446,7 @@ class SqliteBackend implements StorageBackend {
       template_id: string | null;
       source: string | null;
       gcal_key: string | null;
-      notify_offset_min: number | null;
+      notify_offset_min: number | string | null;
     }[]>(
       'SELECT id, date, start_min, duration_min, label, project_id, template_id, source, gcal_key, notify_offset_min FROM blocks WHERE deleted_at IS NULL',
     );
@@ -449,7 +461,10 @@ class SqliteBackend implements StorageBackend {
         ...(r.project_id !== null ? { projectId: r.project_id } : {}),
         ...(r.source === 'gcal' ? { source: 'gcal' as const } : {}),
         ...(r.gcal_key !== null ? { gcalKey: r.gcal_key } : {}),
-        ...(r.notify_offset_min !== null ? { notifyOffsetMin: r.notify_offset_min } : {}),
+        ...((): { notifyOffsetsMin?: readonly number[] } => {
+          const offsets = decodeNotifyOffsets(r.notify_offset_min);
+          return offsets.length > 0 ? { notifyOffsetsMin: offsets } : {};
+        })(),
       };
       const list = blocksByDate[r.date] ?? [];
       list.push(block);
@@ -643,7 +658,7 @@ class SqliteBackend implements StorageBackend {
         if (old === undefined) {
           await db.execute(
             'INSERT INTO blocks (id, date, start_min, duration_min, label, project_id, template_id, source, gcal_key, notify_offset_min, created_at, updated_at, created_by_device_id, updated_by_device_id, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0) ON CONFLICT(id) DO UPDATE SET date = excluded.date, start_min = excluded.start_min, duration_min = excluded.duration_min, label = excluded.label, project_id = excluded.project_id, template_id = excluded.template_id, source = excluded.source, gcal_key = excluded.gcal_key, notify_offset_min = excluded.notify_offset_min, deleted_at = NULL, updated_at = excluded.updated_at, updated_by_device_id = excluded.updated_by_device_id, revision = blocks.revision + 1',
-            [id, b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, b.source ?? null, b.gcalKey ?? null, b.notifyOffsetMin ?? null, now, now, dev, dev],
+            [id, b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, b.source ?? null, b.gcalKey ?? null, encodeNotifyOffsets(b.notifyOffsetsMin), now, now, dev, dev],
           );
         } else if (
           old.date !== b.date ||
@@ -652,11 +667,11 @@ class SqliteBackend implements StorageBackend {
           old.label !== b.label ||
           old.projectId !== b.projectId ||
           old.templateId !== b.templateId ||
-          old.notifyOffsetMin !== b.notifyOffsetMin
+          !notifyOffsetsEqual(old.notifyOffsetsMin, b.notifyOffsetsMin)
         ) {
           await db.execute(
             'UPDATE blocks SET date = ?, start_min = ?, duration_min = ?, label = ?, project_id = ?, template_id = ?, notify_offset_min = ?, updated_at = ?, updated_by_device_id = ?, revision = revision + 1 WHERE id = ?',
-            [b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, b.notifyOffsetMin ?? null, now, dev, id],
+            [b.date, b.start, b.durationMin, b.label, b.projectId ?? null, b.templateId ?? null, encodeNotifyOffsets(b.notifyOffsetsMin), now, dev, id],
           );
         }
       }

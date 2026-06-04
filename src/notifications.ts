@@ -91,18 +91,19 @@ export const useNotificationScheduler = (
 
     for (const [date, blocks] of Object.entries(blocksByDate)) {
       for (const block of blocks) {
-        if (block.notifyOffsetMin === undefined) continue;
         if (block.source === 'gcal') continue;
-        const offset = block.notifyOffsetMin;
-        const fireMs = blockFireTimeMs(date, block.start, offset);
-        const delay = fireMs - now;
-        if (delay <= 0) continue;
-        if (delay > NOTIFY_LOOKAHEAD_MS) continue;
-        if (delay > SETTIMEOUT_MAX_MS) continue;
-        const id = window.setTimeout(() => {
-          void fireNotification(block, offset);
-        }, delay);
-        ids.push(id);
+        if (block.notifyOffsetsMin === undefined) continue;
+        for (const offset of block.notifyOffsetsMin) {
+          const fireMs = blockFireTimeMs(date, block.start, offset);
+          const delay = fireMs - now;
+          if (delay <= 0) continue;
+          if (delay > NOTIFY_LOOKAHEAD_MS) continue;
+          if (delay > SETTIMEOUT_MAX_MS) continue;
+          const id = window.setTimeout(() => {
+            void fireNotification(block, offset);
+          }, delay);
+          ids.push(id);
+        }
       }
     }
 
