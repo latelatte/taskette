@@ -6,7 +6,7 @@ import {
   projectBudgetUsage,
   worstBudgetStatus,
 } from '../domain/budget.js';
-import { elapsedRatio, monthsOfYear, today, yearMonthOf, yearOf } from '../dates.js';
+import { elapsedRatio, monthsOfYear, nowCutoffOf, today, yearMonthOf, yearOf } from '../dates.js';
 import { cn } from '../lib/utils.js';
 
 const FALLBACK_BLOCK_COLOR = '#A39A92';
@@ -39,13 +39,22 @@ export function YearView({ currentDate, blocksByDate, projects, projectById, onM
   const todayYM = yearMonthOf(todayStr);
 
   const monthsData = useMemo(() => {
+    const nowCutoff = nowCutoffOf(new Date());
     return monthsOfYear(year).map((ym) => {
       const agg = aggregateMonthly(blocksByDate, ym);
+      const actualAgg = aggregateMonthly(blocksByDate, ym, nowCutoff);
       const elapsed = elapsedRatio(ym, todayStr);
 
       const usages = projects.map((p) => ({
         project: p,
-        usage: projectBudgetUsage(p, agg.byProject.get(p.id) ?? 0, elapsed, ym, todayStr),
+        usage: projectBudgetUsage(
+          p,
+          actualAgg.byProject.get(p.id) ?? 0,
+          agg.byProject.get(p.id) ?? 0,
+          elapsed,
+          ym,
+          todayStr,
+        ),
       }));
 
       const budgetedUsages = usages.filter((u) => u.usage.status !== 'noBudget');

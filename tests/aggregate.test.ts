@@ -68,3 +68,31 @@ describe('aggregateDaily', () => {
     expect(r.unassigned).toBe(0);
   });
 });
+
+describe('aggregateMonthly with cutoff', () => {
+  const at = (id: string, start: number, durationMin: number, projectId?: string): TimeBlock => ({
+    id,
+    label: id,
+    start,
+    durationMin,
+    ...(projectId !== undefined ? { projectId } : {}),
+  });
+  const data: Record<DateString, readonly TimeBlock[]> = {
+    '2026-05-09': [at('past', 540, 60, 'p1')],
+    // today 10:30 cutoff: 9:00-10:00 done, 10:00-11:00 half done, 13:00 not started
+    '2026-05-10': [at('done', 540, 60, 'p1'), at('running', 600, 60, 'p1'), at('later', 780, 60)],
+    '2026-05-11': [at('future', 540, 120, 'p1')],
+  };
+
+  it('counts past days fully, today up to the cutoff, and skips future days', () => {
+    const a = aggregateMonthly(data, '2026-05', { date: '2026-05-10', minute: 630 });
+    expect(a.byProject.get('p1')).toBe(60 + 60 + 30);
+    expect(a.unassigned).toBe(0);
+  });
+
+  it('includes everything without a cutoff', () => {
+    const a = aggregateMonthly(data, '2026-05');
+    expect(a.byProject.get('p1')).toBe(60 + 60 + 60 + 120);
+    expect(a.unassigned).toBe(60);
+  });
+});

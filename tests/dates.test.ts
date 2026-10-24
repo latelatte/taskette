@@ -3,6 +3,7 @@ import {
   addMonths,
   daysOfMonthGrid,
   daysOfWeek,
+  elapsedRatio,
   monthsOfYear,
   weekStart,
   yearOf,
@@ -118,5 +119,25 @@ describe('addMonths', () => {
 describe('yearOf', () => {
   it('extracts year', () => {
     expect(yearOf('2026-05-09')).toBe('2026');
+  });
+});
+
+describe('elapsedRatio (business days)', () => {
+  // 2026-10 has 22 weekdays; Oct 1 is a Thursday.
+  it('counts weekdays strictly before today', () => {
+    expect(elapsedRatio('2026-10', '2026-10-10')).toBe(7 / 22); // Sat: Oct 1-2, 5-9
+  });
+
+  it('stays below 1 on the last weekday', () => {
+    expect(elapsedRatio('2026-10', '2026-10-30')).toBe(21 / 22);
+  });
+
+  it('reaches 1 on a weekend after the last weekday', () => {
+    expect(elapsedRatio('2026-10', '2026-10-31')).toBe(1);
+  });
+
+  it('returns 1 for past months and 0 for future months', () => {
+    expect(elapsedRatio('2026-09', '2026-10-10')).toBe(1);
+    expect(elapsedRatio('2026-11', '2026-10-10')).toBe(0);
   });
 });

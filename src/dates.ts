@@ -1,3 +1,4 @@
+import type { Cutoff } from './domain/aggregate.js';
 import type { DateString } from './domain/types.js';
 
 const DAY_NAMES_JA = ['日', '月', '火', '水', '木', '金', '土'] as const;
@@ -18,6 +19,12 @@ export const parseDate = (s: DateString): Date => {
 };
 
 export const today = (): DateString => formatDate(new Date());
+
+/** 実績集計用の打ち切り時刻 (ローカル日付 + 0 時からの経過分)。 */
+export const nowCutoffOf = (d: Date): Cutoff => ({
+  date: formatDate(d),
+  minute: d.getHours() * 60 + d.getMinutes(),
+});
 
 export const addDays = (s: DateString, n: number): DateString => {
   const d = parseDate(s);
@@ -45,12 +52,14 @@ export const daysInMonth = (yearMonth: string): number => {
   return new Date(y, m, 0).getDate();
 };
 
+/** 月の営業日 (月-金) のうち、todayDate より前に過ぎた割合。当日は未経過として数える。 */
 export const elapsedRatio = (yearMonth: string, todayDate: DateString = today()): number => {
   const todayMonth = yearMonthOf(todayDate);
   if (yearMonth < todayMonth) return 1;
   if (yearMonth > todayMonth) return 0;
-  const dayOfMonth = parseInt(todayDate.slice(8, 10), 10);
-  return Math.max(0, Math.min(1, dayOfMonth / daysInMonth(yearMonth)));
+  const total = businessDaysRemainingInMonth(`${yearMonth}-01`);
+  const remaining = businessDaysRemainingInMonth(todayDate);
+  return total === 0 ? 1 : (total - remaining) / total;
 };
 
 export const weekStart = (s: DateString): DateString => {
@@ -89,7 +98,8 @@ export const yearOf = (s: DateString): string => s.slice(0, 4);
 
 export const formatJaYear = (year: string): string => `${year}年`;
 
-/** 指定日 (含む) から月末までの営業日 (月-金) の数。祝日は考慮しない MVP 実装。 */
+/** 指定日 (含む) から月末までの営業日 (月-金) の数。 */
+// SHORTCUT: 祝日は考慮しない (営業日数が祝日の分だけ多く出る)。祝日カレンダーを持ち、ここで除外すれば elapsedRatio も追従する。
 export const businessDaysRemainingInMonth = (targetDate: DateString): number => {
   const d = parseDate(targetDate);
   const ym = yearMonthOf(targetDate);

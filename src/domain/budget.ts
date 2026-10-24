@@ -20,9 +20,12 @@ export type BudgetUsage = {
   readonly lowH: number | null;
   readonly highH: number | null;
   readonly toleranceH: number;
+  /** 月末予測 = 実績 + 残りの予定 (= 予定込み合計)。終了済み案件は null。 */
   readonly projection: number | null;
   readonly ratio: number;
   readonly barFraction: number;
+  /** 予定込みのバー長 (barFraction と同じ highH 基準)。 */
+  readonly plannedBarFraction: number;
 };
 
 export const effectiveBudgetPM = (
@@ -39,11 +42,13 @@ export const effectiveBudgetPM = (
 export const projectBudgetUsage = (
   project: Project,
   actualMinutes: number,
+  plannedMinutes: number,
   elapsed: number,
   yearMonth?: string,
   today?: string,
 ): BudgetUsage => {
   const actualH = actualMinutes / 60;
+  const plannedH = Math.max(actualH, plannedMinutes / 60);
   const actualPM = actualH / HOURS_PER_PERSON_MONTH;
   const budgetPM = effectiveBudgetPM(project, yearMonth);
 
@@ -53,9 +58,7 @@ export const projectBudgetUsage = (
     && project.endDate !== undefined
     && project.endDate < today;
   const effectiveElapsed = isFinalized ? 1 : elapsed;
-  const projection = isFinalized
-    ? null
-    : (elapsed >= PROJECTION_MIN_ELAPSED ? actualH / elapsed : null);
+  const projection = isFinalized ? null : plannedH;
 
   if (budgetPM === undefined) {
     return {
@@ -69,6 +72,7 @@ export const projectBudgetUsage = (
       projection,
       ratio: 0,
       barFraction: 0,
+      plannedBarFraction: 0,
     };
   }
 
@@ -78,12 +82,18 @@ export const projectBudgetUsage = (
   const highH = budgetH + toleranceH;
   const ratio = budgetH > 0 ? actualH / budgetH : 0;
   const barFraction = highH > 0 ? Math.min(1, actualH / highH) : 0;
+  const plannedBarFraction = highH > 0 ? Math.min(1, plannedH / highH) : 0;
 
   const isOver = actualH > highH;
   const isUnderConfirmed = effectiveElapsed >= 1 && actualH < lowH;
   const isProjectedOver = !isOver && projection !== null && projection > highH;
+  // 月初は残りの予定がまだ入っていないのが普通なので、不足見込みは一定経過後のみ。
   const isProjectedUnder =
-    !isUnderConfirmed && projection !== null && projection < lowH && effectiveElapsed < 1;
+    !isUnderConfirmed
+    && projection !== null
+    && projection < lowH
+    && elapsed >= PROJECTION_MIN_ELAPSED
+    && effectiveElapsed < 1;
 
   const status: BudgetStatus = isOver
     ? 'over'
@@ -106,6 +116,7 @@ export const projectBudgetUsage = (
     projection,
     ratio,
     barFraction,
+    plannedBarFraction,
   };
 };
 

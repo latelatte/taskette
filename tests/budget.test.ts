@@ -21,7 +21,7 @@ const minutes = (h: number) => h * 60;
 
 describe('projectBudgetUsage', () => {
   it('returns noBudget when project has no monthlyBudget', () => {
-    const u = projectBudgetUsage(proj(), minutes(50), 0.5);
+    const u = projectBudgetUsage(proj(), minutes(50), minutes(50), 0.5);
     expect(u.status).toBe('noBudget');
     expect(u.budgetH).toBe(null);
     expect(u.lowH).toBe(null);
@@ -31,8 +31,8 @@ describe('projectBudgetUsage', () => {
 
   it('ok within tolerance band mid-month', () => {
     // budget = 1 PM = 160h, tolerance = ±20h, low=140, high=180
-    // 80h actual at elapsed=0.5 → projection 160h, within band
-    const u = projectBudgetUsage(proj(1), minutes(80), 0.5);
+    // 80h actual + 80h remaining schedule → projection 160h, within band
+    const u = projectBudgetUsage(proj(1), minutes(80), minutes(160), 0.5);
     expect(u.status).toBe('ok');
     expect(u.budgetH).toBe(HOURS_PER_PERSON_MONTH);
     expect(u.lowH).toBe(HOURS_PER_PERSON_MONTH - TOLERANCE_HOURS_PER_PM);
@@ -42,63 +42,76 @@ describe('projectBudgetUsage', () => {
 
   it('over when actualH > highH', () => {
     // 1 PM, actual 200h > high 180h
-    const u = projectBudgetUsage(proj(1), minutes(200), 0.9);
+    const u = projectBudgetUsage(proj(1), minutes(200), minutes(200), 0.9);
     expect(u.status).toBe('over');
     expect(u.barFraction).toBe(1);
   });
 
   it('underConfirmed when month end and actualH < lowH', () => {
     // 1 PM, actual 100h < low 140h, elapsed=1
-    const u = projectBudgetUsage(proj(1), minutes(100), 1);
+    const u = projectBudgetUsage(proj(1), minutes(100), minutes(100), 1);
     expect(u.status).toBe('underConfirmed');
   });
 
-  it('projectedOver when projection > highH but not yet over', () => {
-    // 1 PM, actual 100h at elapsed=0.5 → projection 200h > high 180h
-    const u = projectBudgetUsage(proj(1), minutes(100), 0.5);
+  it('projectedOver when planned total > highH but not yet over', () => {
+    // 1 PM, actual 100h + 100h remaining schedule → projection 200h > high 180h
+    const u = projectBudgetUsage(proj(1), minutes(100), minutes(200), 0.5);
     expect(u.status).toBe('projectedOver');
     expect(u.projection).toBe(200);
   });
 
-  it('projectedUnder when projection < lowH and elapsed < 1', () => {
-    // 1 PM, actual 50h at elapsed=0.5 → projection 100h < low 140h
-    const u = projectBudgetUsage(proj(1), minutes(50), 0.5);
+  it('does not inflate future schedule by elapsed ratio', () => {
+    // Regression: 40h of recurring blocks booked for the whole month, only
+    // 12h of it done at elapsed=0.3. Old formula (planned / elapsed) gave ~133h.
+    const u = projectBudgetUsage(proj(0.25), minutes(12), minutes(40), 0.3);
+    expect(u.projection).toBe(40);
+    expect(u.status).toBe('ok'); // 0.25 PM = 40h, band 35–45h
+  });
+
+  it('projectedUnder when planned total < lowH and elapsed < 1', () => {
+    // 1 PM, actual 50h + 50h remaining → projection 100h < low 140h
+    const u = projectBudgetUsage(proj(1), minutes(50), minutes(100), 0.5);
     expect(u.status).toBe('projectedUnder');
     expect(u.projection).toBe(100);
   });
 
-  it('projection is null when elapsed below threshold (0.2)', () => {
-    const u = projectBudgetUsage(proj(1), minutes(10), 0.1);
-    expect(u.projection).toBe(null);
+  it('suppresses projectedUnder early in the month (elapsed < 0.2)', () => {
+    const u = projectBudgetUsage(proj(1), minutes(10), minutes(10), 0.1);
+    expect(u.projection).toBe(10);
     expect(u.status).toBe('ok');
   });
 
+  it('projection never falls below actual', () => {
+    const u = projectBudgetUsage(proj(1), minutes(50), minutes(30), 0.5);
+    expect(u.projection).toBe(50);
+  });
+
   it('barFraction caps at 1', () => {
-    const u = projectBudgetUsage(proj(1), minutes(500), 1);
+    const u = projectBudgetUsage(proj(1), minutes(500), minutes(500), 1);
     expect(u.barFraction).toBe(1);
   });
 
   it('actualPM converts hours to person-months', () => {
-    const u = projectBudgetUsage(proj(1), minutes(80), 0.5);
+    const u = projectBudgetUsage(proj(1), minutes(80), minutes(80), 0.5);
     expect(u.actualPM).toBe(0.5);
   });
 
   it('lowH clamps to 0 for tiny budgets', () => {
     // 0.05 PM = 8h budget, tolerance 1h, low = 7, high = 9
-    const u = projectBudgetUsage(proj(0.05), minutes(8), 0.5);
+    const u = projectBudgetUsage(proj(0.05), minutes(8), minutes(8), 0.5);
     expect(u.lowH).toBe(7);
     expect(u.highH).toBe(9);
   });
 
   it('over takes priority over projection-based statuses', () => {
     // already over with high projection too
-    const u = projectBudgetUsage(proj(1), minutes(200), 0.5);
+    const u = projectBudgetUsage(proj(1), minutes(200), minutes(200), 0.5);
     expect(u.status).toBe('over');
   });
 
   it('underConfirmed only fires at month end (elapsed >= 1)', () => {
     // mid-month, actual very low → projectedUnder, not underConfirmed
-    const u = projectBudgetUsage(proj(1), minutes(10), 0.5);
+    const u = projectBudgetUsage(proj(1), minutes(10), minutes(10), 0.5);
     expect(u.status).toBe('projectedUnder');
   });
 });
@@ -121,6 +134,7 @@ describe('projectBudgetUsage with finalized project (endDate)', () => {
     const u = projectBudgetUsage(
       projEnded(1, '2026-05-10'),
       minutes(5),
+      minutes(5),
       0.36,
       '2026-05',
       '2026-05-12',
@@ -132,6 +146,7 @@ describe('projectBudgetUsage with finalized project (endDate)', () => {
   it('still flags over when actual exceeds high band even after finalization', () => {
     const u = projectBudgetUsage(
       projEnded(0.5, '2026-05-10'),
+      minutes(200),
       minutes(200),
       0.36,
       '2026-05',
@@ -145,6 +160,7 @@ describe('projectBudgetUsage with finalized project (endDate)', () => {
     const u = projectBudgetUsage(
       projEnded(0.5, '2026-05-10'),
       minutes(80),
+      minutes(80),
       0.36,
       '2026-05',
       '2026-05-12',
@@ -153,7 +169,7 @@ describe('projectBudgetUsage with finalized project (endDate)', () => {
   });
 
   it('keeps projection logic when today is undefined (back-compat)', () => {
-    const u = projectBudgetUsage(projEnded(1, '2026-05-10'), minutes(10), 0.5);
+    const u = projectBudgetUsage(projEnded(1, '2026-05-10'), minutes(10), minutes(10), 0.5);
     expect(u.status).toBe('projectedUnder');
   });
 
@@ -161,6 +177,7 @@ describe('projectBudgetUsage with finalized project (endDate)', () => {
     // endDate is later this month — project still has runway, projection applies
     const u = projectBudgetUsage(
       projEnded(1, '2026-05-25'),
+      minutes(10),
       minutes(10),
       0.36,
       '2026-05',
@@ -229,6 +246,7 @@ describe('projectBudgetUsage with override', () => {
     const u = projectBudgetUsage(
       projWithOverride(1, { '2026-05': 0.5 }),
       minutes(100),
+      minutes(100),
       1,
       '2026-05',
     );
@@ -241,6 +259,7 @@ describe('projectBudgetUsage with override', () => {
     // actual=100h at elapsed=1 → underConfirmed (low=140)
     const u = projectBudgetUsage(
       projWithOverride(1, { '2026-04': 0.5 }),
+      minutes(100),
       minutes(100),
       1,
       '2026-05',

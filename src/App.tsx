@@ -22,7 +22,7 @@ import type { DateString, GcalAssignment, Project, ProjectEnergy, TaskTemplate, 
 import { isProjectActiveInMonth } from './domain/types.js';
 import { Day } from './domain/day.js';
 import { PROJECT_COLOR_PALETTE } from './projects.js';
-import { addDays, addMonths, businessDaysRemainingInMonth, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, today, yearMonthOf, yearOf } from './dates.js';
+import { addDays, addMonths, businessDaysRemainingInMonth, daysOfWeek, elapsedRatio, formatJaDate, formatJaYearMonth, nowCutoffOf, today, yearMonthOf, yearOf } from './dates.js';
 import type { ViewMode } from './views/types.js';
 import { DayView } from './views/DayView.js';
 import { WeekView } from './views/WeekView.js';
@@ -2387,9 +2387,12 @@ export function App() {
           {(() => {
             const ym = yearMonthOf(currentDate);
             const aggregate = aggregateMonthly(mergedBlocksByDate, ym);
+            const actualAggregate = aggregateMonthly(mergedBlocksByDate, ym, nowCutoffOf(new Date()));
             const elapsed = elapsedRatio(ym);
-            const totalAssignedMin = Array.from(aggregate.byProject.values()).reduce((a, b) => a + b, 0);
-            const grandTotalMin = totalAssignedMin + aggregate.unassigned;
+            const sumMin = (a: typeof aggregate): number =>
+              Array.from(a.byProject.values()).reduce((x, y) => x + y, 0) + a.unassigned;
+            const actualTotalMin = sumMin(actualAggregate);
+            const plannedTotalMin = sumMin(aggregate);
             return (
               <>
                 <DialogHeader>
@@ -2411,8 +2414,14 @@ export function App() {
                         return ra - rb;
                       })
                       .map((p) => {
-                      const minutes = aggregate.byProject.get(p.id) ?? 0;
-                      const u = projectBudgetUsage(p, minutes, elapsed, ym, todayDateStr);
+                      const u = projectBudgetUsage(
+                        p,
+                        actualAggregate.byProject.get(p.id) ?? 0,
+                        aggregate.byProject.get(p.id) ?? 0,
+                        elapsed,
+                        ym,
+                        todayDateStr,
+                      );
                       const effectivePM = effectiveBudgetPM(p, ym);
                       const hasOverride = p.monthlyBudgetOverrides?.[ym] !== undefined;
                       const isEditingThis = editingMonthBudgetProjectId === p.id;
@@ -2492,11 +2501,20 @@ export function App() {
                             </div>
                           )}
                           {u.budgetH !== null && (
-                            <div className="h-1.5 bg-muted rounded-[3px] overflow-hidden">
+                            <div className="relative h-1.5 bg-muted rounded-[3px] overflow-hidden">
                               <div
-                                className="h-full transition-[width] duration-200"
+                                className="absolute inset-y-0 left-0 opacity-35 transition-[width] duration-200"
+                                style={{ width: `${u.plannedBarFraction * 100}%`, background: barColor }}
+                              />
+                              <div
+                                className="absolute inset-y-0 left-0 transition-[width] duration-200"
                                 style={{ width: `${u.barFraction * 100}%`, background: barColor }}
                               />
+                            </div>
+                          )}
+                          {u.projection !== null && u.projection > u.actualH && (
+                            <div className="text-[11px] text-muted-foreground mt-1">
+                              予定込み {u.projection.toFixed(1)}h（残りの予定 {(u.projection - u.actualH).toFixed(1)}h）
                             </div>
                           )}
                           {u.budgetH !== null && u.lowH !== null && u.highH !== null && (
@@ -2514,14 +2532,14 @@ export function App() {
                               ⚠ 不足 ({(u.lowH - u.actualH).toFixed(1)}h 不足、月末確定)
                             </div>
                           )}
-                          {u.status === 'projectedOver' && u.projection !== null && (
+                          {u.status === 'projectedOver' && u.projection !== null && u.highH !== null && (
                             <div className="text-[11px] mt-0.5" style={{ color: '#A0623A' }}>
-                              ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容を超過する見込み）
+                              ⚠ 予定込みで {u.projection.toFixed(1)}h（許容を {(u.projection - u.highH).toFixed(1)}h 超過する見込み）
                             </div>
                           )}
-                          {u.status === 'projectedUnder' && u.projection !== null && (
+                          {u.status === 'projectedUnder' && u.projection !== null && u.lowH !== null && (
                             <div className="text-[11px] mt-0.5" style={{ color: '#8E6230' }}>
-                              ⚠ このままだと月末予測 {u.projection.toFixed(1)}h（許容に届かない見込み）
+                              ⚠ 予定込みで {u.projection.toFixed(1)}h（許容まであと {(u.lowH - u.projection).toFixed(1)}h）
                             </div>
                           )}
                         </div>
@@ -2531,9 +2549,10 @@ export function App() {
                 )}
 
                 <div className="border-t border-border/60 mt-4 pt-3 text-xs text-foreground/85">
-                  <div>合計実績: {(grandTotalMin / 60).toFixed(1)}h（割当: {(totalAssignedMin / 60).toFixed(1)}h, 未割当: {(aggregate.unassigned / 60).toFixed(1)}h）</div>
+                  <div>実績（現時点まで）: {(actualTotalMin / 60).toFixed(1)}h（未割当: {(actualAggregate.unassigned / 60).toFixed(1)}h）</div>
+                  <div className="mt-0.5">予定込み（月末まで）: {(plannedTotalMin / 60).toFixed(1)}h（未割当: {(aggregate.unassigned / 60).toFixed(1)}h）</div>
                   <div className="text-muted-foreground mt-1">
-                    月の経過: {Math.round(elapsed * 100)}%
+                    月の経過（営業日）: {Math.round(elapsed * 100)}%
                   </div>
                 </div>
                 </>
