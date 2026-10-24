@@ -376,15 +376,21 @@ export const useDriveSync = (
     }
     setStatus({ kind: 'enabling' });
     try {
-      // 1. Drive scope re-consent. Google's incremental authorization
-      // returns a token granting both Calendar (existing) and Drive
-      // (newly added). The refresh token is rotated and saved to keyring
-      // by gcal_oauth_connect.
-      const tokens = await invoke<OAuthTokens>('gcal_oauth_connect', {
+      // 1. Reuse the stored grant when it already covers Drive (Calendar
+      // connect requests both scopes). Otherwise re-consent: Google's
+      // incremental authorization returns a token granting both, and
+      // gcal_oauth_connect rotates the refresh token in keyring.
+      let tokens = await invoke<OAuthTokens | null>('gcal_oauth_silent_refresh', {
         clientId,
         clientSecret,
-        scopes: [SCOPE_CALENDAR_READONLY, SCOPE_DRIVE_APPDATA],
       });
+      if (tokens === null || !tokens.granted_scopes.includes(SCOPE_DRIVE_APPDATA)) {
+        tokens = await invoke<OAuthTokens>('gcal_oauth_connect', {
+          clientId,
+          clientSecret,
+          scopes: [SCOPE_CALENDAR_READONLY, SCOPE_DRIVE_APPDATA],
+        });
+      }
       if (!tokens.granted_scopes.includes(SCOPE_DRIVE_APPDATA)) {
         setStatus({
           kind: 'error',

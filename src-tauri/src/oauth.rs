@@ -120,8 +120,8 @@ where
         .unwrap_or_default()
 }
 
-// `scopes` is optional: None/empty defaults to calendar.readonly only,
-// preserving existing call sites that don't yet ask for Drive.
+// `scopes` is optional: None/empty requests every allowed scope so a single
+// consent covers both Calendar and Drive sync.
 #[tauri::command]
 pub async fn gcal_oauth_connect(
     client_id: String,
@@ -148,7 +148,7 @@ pub async fn gcal_oauth_connect(
 
     let requested_scopes: Vec<String> = match scopes {
         Some(s) if !s.is_empty() => s,
-        _ => vec![SCOPE_CALENDAR_READONLY.to_string()],
+        _ => ALLOWED_SCOPES.iter().map(|s| s.to_string()).collect(),
     };
     // Reject anything outside the allowlist before opening a browser
     // session. A renderer asking for `drive` or `gmail` is a security
