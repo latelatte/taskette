@@ -238,3 +238,4 @@ Thumbs.db
 
 # Claude Code (per-user, not team-shared)
 .claude/settings.local.json
+CLAUDE.md  
