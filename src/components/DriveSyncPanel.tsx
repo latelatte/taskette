@@ -140,7 +140,7 @@ export const DriveSyncPanel = ({ sync }: Props): JSX.Element => {
       <div>
         <p className="text-[12px] text-muted-foreground leading-relaxed mb-4">
           Drive の非表示領域 (appDataFolder) を経由してブロック・案件・テンプレートなどを複数デバイス間で同期します。
-          有効化時に Google で Drive 権限の確認画面が一度表示されます。
+          Google Calendar 連携で接続すると自動で有効になります。
         </p>
 
         <div className="flex items-center justify-between gap-3 px-3.5 py-3 bg-card border border-border rounded-md">

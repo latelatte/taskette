@@ -106,8 +106,12 @@ export type UseDriveSync = {
   readonly enabled: boolean;
   readonly lastSyncedAt: number | null;
   readonly lastResult: SyncResult | null;
-  /** Begin or repeat the enable flow: request Drive consent → smoke test → enable. */
-  readonly enable: () => Promise<void>;
+  /**
+   * Begin or repeat the enable flow: request Drive consent → smoke test → enable.
+   * `allowConsent: false` skips the consent screen and leaves sync disabled
+   * when the stored grant lacks Drive scope.
+   */
+  readonly enable: (opts?: { readonly allowConsent?: boolean }) => Promise<void>;
   readonly disable: () => Promise<void>;
   /** One-shot manual sync. No-op (returns null) when not enabled or busy. */
   readonly runSync: () => Promise<SyncManagerOutcome | null>;
@@ -365,7 +369,7 @@ export const useDriveSync = (
     }
   }, [supported, enabled, getToken]);
 
-  const enable = useCallback(async (): Promise<void> => {
+  const enable = useCallback(async (opts?: { readonly allowConsent?: boolean }): Promise<void> => {
     if (!supported) return;
     const env = import.meta.env as unknown as Record<string, string | undefined>;
     const clientId = env['VITE_GOOGLE_DESKTOP_CLIENT_ID'];
@@ -385,6 +389,10 @@ export const useDriveSync = (
         clientSecret,
       });
       if (tokens === null || !tokens.granted_scopes.includes(SCOPE_DRIVE_APPDATA)) {
+        if (opts?.allowConsent === false) {
+          setStatus({ kind: 'disabled' });
+          return;
+        }
         tokens = await invoke<OAuthTokens>('gcal_oauth_connect', {
           clientId,
           clientSecret,
@@ -429,6 +437,18 @@ export const useDriveSync = (
       setStatus({ kind: 'error', message: `enable Drive sync: ${(e as Error).message}` });
     }
   }, [supported, persistEnable]);
+
+  // Auto-enable right after an interactive Google connect, which already
+  // requested Drive scope. Startup silent refresh (loading → connected)
+  // does not trigger this, so an explicit disable sticks across launches.
+  const prevGcalStatusRef = useRef(gcal.status);
+  useEffect(() => {
+    const prev = prevGcalStatusRef.current;
+    prevGcalStatusRef.current = gcal.status;
+    if (prev === 'connecting' && gcal.status === 'connected' && !enabled) {
+      void enable({ allowConsent: false });
+    }
+  }, [gcal.status, enabled, enable]);
 
   const disable = useCallback(async (): Promise<void> => {
     if (!supported) return;
