@@ -321,8 +321,16 @@ pub async fn gcal_oauth_silent_refresh(
             }))
         }
         Err(RequestTokenError::ServerResponse(err)) => {
-            // invalid_grant => user revoked / refresh token expired => clear and signal disconnect
-            if matches!(err.error(), BasicErrorResponseType::InvalidGrant) {
+            // invalid_grant => user revoked / refresh token expired.
+            // unauthorized_client / invalid_client => token was issued to a
+            // different OAuth client (e.g. after switching Cloud projects).
+            // Either way the stored token is unusable: clear and signal disconnect.
+            if matches!(
+                err.error(),
+                BasicErrorResponseType::InvalidGrant
+                    | BasicErrorResponseType::UnauthorizedClient
+                    | BasicErrorResponseType::InvalidClient
+            ) {
                 let _ = entry.delete_credential();
                 Ok(None)
             } else {
